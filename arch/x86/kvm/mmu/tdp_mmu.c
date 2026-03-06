@@ -1746,6 +1746,102 @@ bool kvm_tdp_mmu_write_protect_gfn(struct kvm *kvm,
 	return spte_set;
 }
 
+#ifdef CONFIG_KVM_NYX
+/*
+ * Clears the execute permission on the last level SPTE mapping this GFN.
+ * Used for WtE (Written-then-Executed) detection via EPT NX.
+ * Returns true if an SPTE was modified and a TLB flush is needed.
+ */
+static bool set_nx_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
+		       gfn_t gfn)
+{
+	struct tdp_iter iter;
+	u64 new_spte;
+	bool spte_set = false;
+
+	rcu_read_lock();
+
+	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
+		if (!is_shadow_present_pte(iter.old_spte) ||
+		    !is_last_spte(iter.old_spte, iter.level))
+			continue;
+
+		/* Clear execute bit (bit 2 in EPT) */
+		new_spte = iter.old_spte & ~shadow_x_mask;
+
+		if (new_spte == iter.old_spte)
+			break;
+
+		tdp_mmu_iter_set_spte(kvm, &iter, new_spte);
+		spte_set = true;
+	}
+
+	rcu_read_unlock();
+
+	return spte_set;
+}
+
+bool kvm_tdp_mmu_set_nx_gfn(struct kvm *kvm,
+			    struct kvm_memory_slot *slot, gfn_t gfn)
+{
+	struct kvm_mmu_page *root;
+	bool spte_set = false;
+
+	lockdep_assert_held_write(&kvm->mmu_lock);
+	for_each_tdp_mmu_root(kvm, root, slot->as_id)
+		spte_set |= set_nx_gfn(kvm, root, gfn);
+
+	return spte_set;
+}
+
+/*
+ * Restores the execute permission on the last level SPTE mapping this GFN.
+ * Used after WtE detection to allow guest execution to proceed.
+ * Returns true if an SPTE was modified and a TLB flush is needed.
+ */
+static bool clear_nx_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
+			 gfn_t gfn)
+{
+	struct tdp_iter iter;
+	u64 new_spte;
+	bool spte_set = false;
+
+	rcu_read_lock();
+
+	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
+		if (!is_shadow_present_pte(iter.old_spte) ||
+		    !is_last_spte(iter.old_spte, iter.level))
+			continue;
+
+		/* Set execute bit (bit 2 in EPT) */
+		new_spte = iter.old_spte | shadow_x_mask;
+
+		if (new_spte == iter.old_spte)
+			break;
+
+		tdp_mmu_iter_set_spte(kvm, &iter, new_spte);
+		spte_set = true;
+	}
+
+	rcu_read_unlock();
+
+	return spte_set;
+}
+
+bool kvm_tdp_mmu_clear_nx_gfn(struct kvm *kvm,
+			      struct kvm_memory_slot *slot, gfn_t gfn)
+{
+	struct kvm_mmu_page *root;
+	bool spte_set = false;
+
+	lockdep_assert_held_write(&kvm->mmu_lock);
+	for_each_tdp_mmu_root(kvm, root, slot->as_id)
+		spte_set |= clear_nx_gfn(kvm, root, gfn);
+
+	return spte_set;
+}
+#endif /* CONFIG_KVM_NYX */
+
 /*
  * Return the level of the lowest level SPTE added to sptes.
  * That SPTE may be non-present.

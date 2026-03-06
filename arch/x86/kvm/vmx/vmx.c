@@ -5888,6 +5888,27 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	 */
 	if (unlikely(allow_smaller_maxphyaddr && !kvm_vcpu_is_legal_gpa(vcpu, gpa)))
 		return kvm_emulate_instruction(vcpu, 0);
+#ifdef CONFIG_KVM_NYX
+	/* WtE: intercept fetch violations on NX-tracked pages */
+	if ((error_code & PFERR_FETCH_MASK) &&
+	    vcpu->kvm->arch.wte_enabled) {
+		gfn_t gfn = gpa >> PAGE_SHIFT;
+		unsigned long flags;
+
+		spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
+		if (vcpu->kvm->arch.wte_nx_bitmap &&
+		    gfn < vcpu->kvm->arch.wte_nx_bitmap_max &&
+		    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap)) {
+			spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+			vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
+			vcpu->run->kafl_wte.gfn = gfn;
+			vcpu->run->kafl_wte.gpa = gpa;
+			vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
+			return 0; /* exit to userspace */
+		}
+		spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+	}
+#endif
 
 	return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 }

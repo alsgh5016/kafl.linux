@@ -1513,6 +1513,12 @@ struct kvm_arch {
 #ifdef CONFIG_KVM_NYX
 	void* fdl_opaque; 
 	uint64_t printk_addr;
+
+	/* WtE (Written-then-Executed) EPT NX tracking */
+	bool wte_enabled;
+	unsigned long *wte_nx_bitmap;      /* bitmap of GFNs with WtE NX set */
+	unsigned long wte_nx_bitmap_max;   /* max GFN tracked (bitmap size in bits) */
+	spinlock_t wte_lock;               /* protects bitmap + SPTE updates */
 #endif
 };
 

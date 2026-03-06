@@ -172,6 +172,13 @@ bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
 				    struct kvm_memory_slot *slot, u64 gfn,
 				    int min_level);
 
+#ifdef CONFIG_KVM_NYX
+bool kvm_mmu_slot_gfn_set_nx(struct kvm *kvm,
+			     struct kvm_memory_slot *slot, u64 gfn);
+bool kvm_mmu_slot_gfn_clear_nx(struct kvm *kvm,
+			       struct kvm_memory_slot *slot, u64 gfn);
+#endif
+
 /* Flush the given page (huge or not) of guest memory. */
 static inline void kvm_flush_remote_tlbs_gfn(struct kvm *kvm, gfn_t gfn, int level)
 {

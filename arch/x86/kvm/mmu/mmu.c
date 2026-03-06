@@ -1433,6 +1433,30 @@ bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
 	return write_protected;
 }
 
+#ifdef CONFIG_KVM_NYX
+bool kvm_mmu_slot_gfn_set_nx(struct kvm *kvm,
+			     struct kvm_memory_slot *slot, u64 gfn)
+{
+	bool nx_set = false;
+
+	if (tdp_mmu_enabled)
+		nx_set = kvm_tdp_mmu_set_nx_gfn(kvm, slot, gfn);
+
+	return nx_set;
+}
+
+bool kvm_mmu_slot_gfn_clear_nx(struct kvm *kvm,
+			       struct kvm_memory_slot *slot, u64 gfn)
+{
+	bool nx_cleared = false;
+
+	if (tdp_mmu_enabled)
+		nx_cleared = kvm_tdp_mmu_clear_nx_gfn(kvm, slot, gfn);
+
+	return nx_cleared;
+}
+#endif /* CONFIG_KVM_NYX */
+
 static bool kvm_vcpu_write_protect_gfn(struct kvm_vcpu *vcpu, u64 gfn)
 {
 	struct kvm_memory_slot *slot;

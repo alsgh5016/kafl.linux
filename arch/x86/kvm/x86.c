@@ -88,6 +88,7 @@
 
 #ifdef CONFIG_KVM_NYX
 #include "vmx/vmx_pt.h"
+#include "mmu/mmu_internal.h"
 #endif
 
 #define CREATE_TRACE_POINTS
@@ -7322,6 +7323,188 @@ set_pit2_out:
 	case KVM_VMX_FDL_SETUP_FD: 
 		r = -EPERM;
 		break;
+	case KVM_NYX_WTE_ENABLE: {
+		unsigned long max_gfn;
+		struct kvm_memslots *slots;
+		struct kvm_memory_slot *slot;
+		int bkt;
+
+		mutex_lock(&kvm->lock);
+		if (kvm->arch.wte_enabled) {
+			r = 0;
+			mutex_unlock(&kvm->lock);
+			break;
+		}
+
+		/* Find max GFN across all memslots */
+		max_gfn = 0;
+		slots = __kvm_memslots(kvm, 0);
+		kvm_for_each_memslot(slot, bkt, slots) {
+			gfn_t end = slot->base_gfn + slot->npages;
+			if (end > max_gfn)
+				max_gfn = end;
+		}
+
+		if (max_gfn == 0) {
+			r = -EINVAL;
+			mutex_unlock(&kvm->lock);
+			break;
+		}
+
+		kvm->arch.wte_nx_bitmap = bitmap_zalloc(max_gfn, GFP_KERNEL);
+		if (!kvm->arch.wte_nx_bitmap) {
+			r = -ENOMEM;
+			mutex_unlock(&kvm->lock);
+			break;
+		}
+		kvm->arch.wte_nx_bitmap_max = max_gfn;
+		spin_lock_init(&kvm->arch.wte_lock);
+		kvm->arch.wte_enabled = true;
+		r = 0;
+		mutex_unlock(&kvm->lock);
+		break;
+	}
+	case KVM_NYX_WTE_DISABLE: {
+		unsigned long flags;
+		unsigned long gfn;
+		struct kvm_memory_slot *slot;
+
+		mutex_lock(&kvm->lock);
+		if (!kvm->arch.wte_enabled) {
+			r = 0;
+			mutex_unlock(&kvm->lock);
+			break;
+		}
+
+		/* Restore execute permission on all NX'd GFNs */
+		write_lock(&kvm->mmu_lock);
+		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+		for_each_set_bit(gfn, kvm->arch.wte_nx_bitmap,
+				 kvm->arch.wte_nx_bitmap_max) {
+			slot = gfn_to_memslot(kvm, gfn);
+			if (slot)
+				kvm_mmu_slot_gfn_clear_nx(kvm, slot, gfn);
+		}
+		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+		kvm_flush_remote_tlbs(kvm);
+		write_unlock(&kvm->mmu_lock);
+
+		kvm->arch.wte_enabled = false;
+		bitmap_free(kvm->arch.wte_nx_bitmap);
+		kvm->arch.wte_nx_bitmap = NULL;
+		kvm->arch.wte_nx_bitmap_max = 0;
+		r = 0;
+		mutex_unlock(&kvm->lock);
+		break;
+	}
+	case KVM_NYX_WTE_SET_NX: {
+		struct kvm_nyx_wte_gfns header;
+		u64 *gfn_array;
+		unsigned long flags;
+		u32 i;
+		bool flush = false;
+
+		if (copy_from_user(&header, argp, sizeof(header))) {
+			r = -EFAULT;
+			break;
+		}
+		if (header.count == 0 || header.count > 4096) {
+			r = -EINVAL;
+			break;
+		}
+		gfn_array = kmalloc_array(header.count, sizeof(u64), GFP_KERNEL);
+		if (!gfn_array) {
+			r = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(gfn_array,
+				   (void __user *)(argp + sizeof(header)),
+				   header.count * sizeof(u64))) {
+			kfree(gfn_array);
+			r = -EFAULT;
+			break;
+		}
+
+		write_lock(&kvm->mmu_lock);
+		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+		for (i = 0; i < header.count; i++) {
+			gfn_t gfn = gfn_array[i];
+			struct kvm_memory_slot *slot;
+
+			if (!kvm->arch.wte_enabled ||
+			    gfn >= kvm->arch.wte_nx_bitmap_max)
+				continue;
+
+			if (test_and_set_bit(gfn, kvm->arch.wte_nx_bitmap))
+				continue; /* already NX */
+
+			slot = gfn_to_memslot(kvm, gfn);
+			if (slot)
+				flush |= kvm_mmu_slot_gfn_set_nx(kvm, slot, gfn);
+		}
+		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+		if (flush)
+			kvm_flush_remote_tlbs(kvm);
+		write_unlock(&kvm->mmu_lock);
+
+		kfree(gfn_array);
+		r = 0;
+		break;
+	}
+	case KVM_NYX_WTE_CLEAR_NX: {
+		struct kvm_nyx_wte_gfns header;
+		u64 *gfn_array;
+		unsigned long flags;
+		u32 i;
+		bool flush = false;
+
+		if (copy_from_user(&header, argp, sizeof(header))) {
+			r = -EFAULT;
+			break;
+		}
+		if (header.count == 0 || header.count > 4096) {
+			r = -EINVAL;
+			break;
+		}
+		gfn_array = kmalloc_array(header.count, sizeof(u64), GFP_KERNEL);
+		if (!gfn_array) {
+			r = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(gfn_array,
+				   (void __user *)(argp + sizeof(header)),
+				   header.count * sizeof(u64))) {
+			kfree(gfn_array);
+			r = -EFAULT;
+			break;
+		}
+
+		write_lock(&kvm->mmu_lock);
+		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+		for (i = 0; i < header.count; i++) {
+			gfn_t gfn = gfn_array[i];
+			struct kvm_memory_slot *slot;
+
+			if (!kvm->arch.wte_enabled ||
+			    gfn >= kvm->arch.wte_nx_bitmap_max)
+				continue;
+
+			if (!test_and_clear_bit(gfn, kvm->arch.wte_nx_bitmap))
+				continue; /* not NX */
+
+			slot = gfn_to_memslot(kvm, gfn);
+			if (slot)
+				flush |= kvm_mmu_slot_gfn_clear_nx(kvm, slot, gfn);
+		}
+		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+		if (flush)
+			kvm_flush_remote_tlbs(kvm);
+		write_unlock(&kvm->mmu_lock);
+
+		kfree(gfn_array);
+		r = 0;
+		break;
+	}
 #endif
 	default:
 		r = -ENOTTY;

@@ -48,6 +48,13 @@ bool kvm_tdp_mmu_write_protect_gfn(struct kvm *kvm,
 				   struct kvm_memory_slot *slot, gfn_t gfn,
 				   int min_level);
 
+#ifdef CONFIG_KVM_NYX
+bool kvm_tdp_mmu_set_nx_gfn(struct kvm *kvm,
+			    struct kvm_memory_slot *slot, gfn_t gfn);
+bool kvm_tdp_mmu_clear_nx_gfn(struct kvm *kvm,
+			      struct kvm_memory_slot *slot, gfn_t gfn);
+#endif
+
 void kvm_tdp_mmu_try_split_huge_pages(struct kvm *kvm,
 				      const struct kvm_memory_slot *slot,
 				      gfn_t start, gfn_t end,
