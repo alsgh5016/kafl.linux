@@ -5899,11 +5899,21 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 		if (vcpu->kvm->arch.wte_nx_bitmap &&
 		    gfn < vcpu->kvm->arch.wte_nx_bitmap_max &&
 		    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap)) {
+			/* CR3 filtering: only exit to userspace for target process */
+			uint64_t current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
+			if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
+			    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
+				/* Non-target process — clear NX tracking, let MMU resolve */
+				clear_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
+				spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+				return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
+			}
 			spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
 			vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
 			vcpu->run->kafl_wte.gfn = gfn;
 			vcpu->run->kafl_wte.gpa = gpa;
 			vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
+			vcpu->run->kafl_wte.cr3 = current_cr3;
 			return 0; /* exit to userspace */
 		}
 		spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);

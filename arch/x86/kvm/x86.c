@@ -7505,6 +7505,25 @@ set_pit2_out:
 		r = 0;
 		break;
 	}
+	case KVM_NYX_WTE_SET_CR3: {
+		u64 target_cr3;
+		unsigned long flags;
+
+		if (copy_from_user(&target_cr3, argp, sizeof(target_cr3))) {
+			r = -EFAULT;
+			break;
+		}
+		/* Mask out PCID/flags bits — keep only PFN */
+		target_cr3 &= ~0xFFFULL;
+
+		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+		kvm->arch.wte_target_cr3 = target_cr3;
+		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+
+		printk(KERN_INFO "kvm-nyx: WtE target CR3 set to 0x%llx\n", target_cr3);
+		r = 0;
+		break;
+	}
 #endif
 	default:
 		r = -ENOTTY;
