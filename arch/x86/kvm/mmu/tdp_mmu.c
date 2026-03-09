@@ -1860,7 +1860,7 @@ static bool set_wp_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
 			continue;
 
 		/* Clear writable bit (bit 1 in EPT) */
-		new_spte = iter.old_spte & ~VMX_EPT_WRITABLE_MASK;
+		new_spte = iter.old_spte & ~PT_WRITABLE_MASK;
 
 		if (new_spte == iter.old_spte)
 			break;
@@ -1902,7 +1902,7 @@ static bool clear_wp_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
 			continue;
 
 		/* Set writable bit (bit 1 in EPT) */
-		new_spte = iter.old_spte | VMX_EPT_WRITABLE_MASK;
+		new_spte = iter.old_spte | PT_WRITABLE_MASK;
 
 		if (new_spte == iter.old_spte)
 			break;
