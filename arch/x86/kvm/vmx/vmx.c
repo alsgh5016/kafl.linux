@@ -5894,6 +5894,21 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 		unsigned long flags;
 		uint64_t current_cr3;
 
+		/*
+		 * WtE: Only intercept violations on PRESENT EPT entries.
+		 * If PFERR_PRESENT_MASK is clear, the EPT entry doesn't exist
+		 * yet (EPT miss). Let kvm_mmu_page_fault() create it first —
+		 * our tdp_mmu_map_handle_target_level() hook will apply W=0/X=0
+		 * from the bitmaps. The NEXT access will then trigger a proper
+		 * violation on the existing protected SPTE.
+		 *
+		 * Without this check, we'd exit to QEMU on the EPT miss,
+		 * QEMU clears the bitmap, and the SPTE gets created with
+		 * default R+W+X permissions — bypassing all protections.
+		 */
+		if (!(error_code & PFERR_PRESENT_MASK))
+			goto wte_skip;
+
 		/* WtE: intercept write violations on WP-tracked pages */
 		if ((error_code & PFERR_WRITE_MASK) &&
 		    !(error_code & PFERR_FETCH_MASK)) {
@@ -5945,6 +5960,8 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 			}
 			spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
 		}
+wte_skip:
+		;
 	}
 #endif
 
