@@ -959,6 +959,25 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 					 fault->pfn, iter->old_spte, fault->prefetch, true,
 					 fault->map_writable, &new_spte);
 
+#ifdef CONFIG_KVM_NYX
+	/* WtE: enforce EPT protections from bitmaps on newly created SPTEs.
+	 * After snapshot restore, EPT is flushed and entries are re-created
+	 * on demand via page faults. We must apply WP/NX at creation time,
+	 * otherwise the protections set by wte_protect_pe_range() are lost. */
+	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
+	    !is_mmio_spte(new_spte)) {
+		gfn_t gfn = iter->gfn;
+		if (gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
+			if (vcpu->kvm->arch.wte_nx_bitmap &&
+			    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap))
+				new_spte &= ~shadow_x_mask;
+			if (vcpu->kvm->arch.wte_wp_bitmap &&
+			    test_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap))
+				new_spte &= ~PT_WRITABLE_MASK;
+		}
+	}
+#endif
+
 	if (new_spte == iter->old_spte)
 		ret = RET_PF_SPURIOUS;
 	else if (tdp_mmu_set_spte_atomic(vcpu->kvm, iter, new_spte))
