@@ -177,6 +177,10 @@ bool kvm_mmu_slot_gfn_set_nx(struct kvm *kvm,
 			     struct kvm_memory_slot *slot, u64 gfn);
 bool kvm_mmu_slot_gfn_clear_nx(struct kvm *kvm,
 			       struct kvm_memory_slot *slot, u64 gfn);
+bool kvm_mmu_slot_gfn_set_wp(struct kvm *kvm,
+			     struct kvm_memory_slot *slot, u64 gfn);
+bool kvm_mmu_slot_gfn_clear_wp(struct kvm *kvm,
+			       struct kvm_memory_slot *slot, u64 gfn);
 #endif
 
 /* Flush the given page (huge or not) of guest memory. */

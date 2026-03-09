@@ -53,6 +53,10 @@ bool kvm_tdp_mmu_set_nx_gfn(struct kvm *kvm,
 			    struct kvm_memory_slot *slot, gfn_t gfn);
 bool kvm_tdp_mmu_clear_nx_gfn(struct kvm *kvm,
 			      struct kvm_memory_slot *slot, gfn_t gfn);
+bool kvm_tdp_mmu_set_wp_gfn(struct kvm *kvm,
+			    struct kvm_memory_slot *slot, gfn_t gfn);
+bool kvm_tdp_mmu_clear_wp_gfn(struct kvm *kvm,
+			      struct kvm_memory_slot *slot, gfn_t gfn);
 #endif
 
 void kvm_tdp_mmu_try_split_huge_pages(struct kvm *kvm,

@@ -1455,6 +1455,28 @@ bool kvm_mmu_slot_gfn_clear_nx(struct kvm *kvm,
 
 	return nx_cleared;
 }
+
+bool kvm_mmu_slot_gfn_set_wp(struct kvm *kvm,
+			     struct kvm_memory_slot *slot, u64 gfn)
+{
+	bool wp_set = false;
+
+	if (tdp_mmu_enabled)
+		wp_set = kvm_tdp_mmu_set_wp_gfn(kvm, slot, gfn);
+
+	return wp_set;
+}
+
+bool kvm_mmu_slot_gfn_clear_wp(struct kvm *kvm,
+			       struct kvm_memory_slot *slot, u64 gfn)
+{
+	bool wp_cleared = false;
+
+	if (tdp_mmu_enabled)
+		wp_cleared = kvm_tdp_mmu_clear_wp_gfn(kvm, slot, gfn);
+
+	return wp_cleared;
+}
 #endif /* CONFIG_KVM_NYX */
 
 static bool kvm_vcpu_write_protect_gfn(struct kvm_vcpu *vcpu, u64 gfn)

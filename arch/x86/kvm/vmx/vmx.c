@@ -5889,34 +5889,62 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	if (unlikely(allow_smaller_maxphyaddr && !kvm_vcpu_is_legal_gpa(vcpu, gpa)))
 		return kvm_emulate_instruction(vcpu, 0);
 #ifdef CONFIG_KVM_NYX
-	/* WtE: intercept fetch violations on NX-tracked pages */
-	if ((error_code & PFERR_FETCH_MASK) &&
-	    vcpu->kvm->arch.wte_enabled) {
+	if (vcpu->kvm->arch.wte_enabled) {
 		gfn_t gfn = gpa >> PAGE_SHIFT;
 		unsigned long flags;
+		uint64_t current_cr3;
 
-		spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
-		if (vcpu->kvm->arch.wte_nx_bitmap &&
-		    gfn < vcpu->kvm->arch.wte_nx_bitmap_max &&
-		    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap)) {
-			/* CR3 filtering: only exit to userspace for target process */
-			uint64_t current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
-			if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
-			    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
-				/* Non-target process — clear NX tracking, let MMU resolve */
-				clear_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
+		/* WtE: intercept write violations on WP-tracked pages */
+		if ((error_code & PFERR_WRITE_MASK) &&
+		    !(error_code & PFERR_FETCH_MASK)) {
+			spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
+			if (vcpu->kvm->arch.wte_wp_bitmap &&
+			    gfn < vcpu->kvm->arch.wte_nx_bitmap_max &&
+			    test_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap)) {
+				current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
+				if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
+				    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
+					/* Non-target process — clear WP, let MMU resolve */
+					clear_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap);
+					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
+				}
 				spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
-				return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
+				vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
+				vcpu->run->kafl_wte.gfn = gfn;
+				vcpu->run->kafl_wte.gpa = gpa;
+				vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
+				vcpu->run->kafl_wte.cr3 = current_cr3;
+				vcpu->run->kafl_wte.type = 1; /* write violation */
+				return 0;
 			}
 			spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
-			vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
-			vcpu->run->kafl_wte.gfn = gfn;
-			vcpu->run->kafl_wte.gpa = gpa;
-			vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
-			vcpu->run->kafl_wte.cr3 = current_cr3;
-			return 0; /* exit to userspace */
 		}
-		spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+
+		/* WtE: intercept fetch violations on NX-tracked pages */
+		if (error_code & PFERR_FETCH_MASK) {
+			spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
+			if (vcpu->kvm->arch.wte_nx_bitmap &&
+			    gfn < vcpu->kvm->arch.wte_nx_bitmap_max &&
+			    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap)) {
+				current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
+				if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
+				    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
+					clear_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
+					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
+				}
+				spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+				vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
+				vcpu->run->kafl_wte.gfn = gfn;
+				vcpu->run->kafl_wte.gpa = gpa;
+				vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
+				vcpu->run->kafl_wte.cr3 = current_cr3;
+				vcpu->run->kafl_wte.type = 0; /* execute violation */
+				return 0;
+			}
+			spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+		}
 	}
 #endif
 

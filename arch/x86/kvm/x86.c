@@ -7357,6 +7357,14 @@ set_pit2_out:
 			mutex_unlock(&kvm->lock);
 			break;
 		}
+		kvm->arch.wte_wp_bitmap = bitmap_zalloc(max_gfn, GFP_KERNEL);
+		if (!kvm->arch.wte_wp_bitmap) {
+			bitmap_free(kvm->arch.wte_nx_bitmap);
+			kvm->arch.wte_nx_bitmap = NULL;
+			r = -ENOMEM;
+			mutex_unlock(&kvm->lock);
+			break;
+		}
 		kvm->arch.wte_nx_bitmap_max = max_gfn;
 		spin_lock_init(&kvm->arch.wte_lock);
 		kvm->arch.wte_enabled = true;
@@ -7392,6 +7400,8 @@ set_pit2_out:
 		kvm->arch.wte_enabled = false;
 		bitmap_free(kvm->arch.wte_nx_bitmap);
 		kvm->arch.wte_nx_bitmap = NULL;
+		bitmap_free(kvm->arch.wte_wp_bitmap);
+		kvm->arch.wte_wp_bitmap = NULL;
 		kvm->arch.wte_nx_bitmap_max = 0;
 		r = 0;
 		mutex_unlock(&kvm->lock);
@@ -7521,6 +7531,114 @@ set_pit2_out:
 		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 
 		printk(KERN_INFO "kvm-nyx: WtE target CR3 set to 0x%llx\n", target_cr3);
+		r = 0;
+		break;
+	}
+	case KVM_NYX_WTE_SET_WP: {
+		struct kvm_nyx_wte_gfns header;
+		u64 *gfn_array;
+		unsigned long flags;
+		u32 i;
+		bool flush = false;
+
+		if (copy_from_user(&header, argp, sizeof(header))) {
+			r = -EFAULT;
+			break;
+		}
+		if (header.count == 0 || header.count > 4096) {
+			r = -EINVAL;
+			break;
+		}
+		gfn_array = kmalloc_array(header.count, sizeof(u64), GFP_KERNEL);
+		if (!gfn_array) {
+			r = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(gfn_array,
+				   (void __user *)(argp + sizeof(header)),
+				   header.count * sizeof(u64))) {
+			kfree(gfn_array);
+			r = -EFAULT;
+			break;
+		}
+
+		write_lock(&kvm->mmu_lock);
+		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+		for (i = 0; i < header.count; i++) {
+			gfn_t gfn = gfn_array[i];
+			struct kvm_memory_slot *slot;
+
+			if (!kvm->arch.wte_enabled ||
+			    gfn >= kvm->arch.wte_nx_bitmap_max)
+				continue;
+
+			if (test_and_set_bit(gfn, kvm->arch.wte_wp_bitmap))
+				continue;
+
+			slot = gfn_to_memslot(kvm, gfn);
+			if (slot)
+				flush |= kvm_mmu_slot_gfn_set_wp(kvm, slot, gfn);
+		}
+		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+		if (flush)
+			kvm_flush_remote_tlbs(kvm);
+		write_unlock(&kvm->mmu_lock);
+
+		kfree(gfn_array);
+		r = 0;
+		break;
+	}
+	case KVM_NYX_WTE_CLEAR_WP: {
+		struct kvm_nyx_wte_gfns header;
+		u64 *gfn_array;
+		unsigned long flags;
+		u32 i;
+		bool flush = false;
+
+		if (copy_from_user(&header, argp, sizeof(header))) {
+			r = -EFAULT;
+			break;
+		}
+		if (header.count == 0 || header.count > 4096) {
+			r = -EINVAL;
+			break;
+		}
+		gfn_array = kmalloc_array(header.count, sizeof(u64), GFP_KERNEL);
+		if (!gfn_array) {
+			r = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(gfn_array,
+				   (void __user *)(argp + sizeof(header)),
+				   header.count * sizeof(u64))) {
+			kfree(gfn_array);
+			r = -EFAULT;
+			break;
+		}
+
+		write_lock(&kvm->mmu_lock);
+		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+		for (i = 0; i < header.count; i++) {
+			gfn_t gfn = gfn_array[i];
+			struct kvm_memory_slot *slot;
+
+			if (!kvm->arch.wte_enabled ||
+			    gfn >= kvm->arch.wte_nx_bitmap_max)
+				continue;
+
+			if (!test_and_clear_bit(gfn, kvm->arch.wte_wp_bitmap))
+				continue;
+
+			slot = gfn_to_memslot(kvm, gfn);
+			if (slot)
+				flush |= kvm_mmu_slot_gfn_clear_wp(kvm, slot, gfn);
+		}
+		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+		if (flush)
+			kvm_flush_remote_tlbs(kvm);
+		write_unlock(&kvm->mmu_lock);
+
+		kfree(gfn_array);
 		r = 0;
 		break;
 	}

@@ -1840,6 +1840,94 @@ bool kvm_tdp_mmu_clear_nx_gfn(struct kvm *kvm,
 
 	return spte_set;
 }
+
+/*
+ * WtE Write Protection: clear/set the writable bit (bit 1) on EPT SPTEs.
+ * Used for detecting writes to target PE pages in real time.
+ */
+static bool set_wp_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
+		       gfn_t gfn)
+{
+	struct tdp_iter iter;
+	u64 new_spte;
+	bool spte_set = false;
+
+	rcu_read_lock();
+
+	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
+		if (!is_shadow_present_pte(iter.old_spte) ||
+		    !is_last_spte(iter.old_spte, iter.level))
+			continue;
+
+		/* Clear writable bit (bit 1 in EPT) */
+		new_spte = iter.old_spte & ~VMX_EPT_WRITABLE_MASK;
+
+		if (new_spte == iter.old_spte)
+			break;
+
+		tdp_mmu_iter_set_spte(kvm, &iter, new_spte);
+		spte_set = true;
+	}
+
+	rcu_read_unlock();
+
+	return spte_set;
+}
+
+bool kvm_tdp_mmu_set_wp_gfn(struct kvm *kvm,
+			    struct kvm_memory_slot *slot, gfn_t gfn)
+{
+	struct kvm_mmu_page *root;
+	bool spte_set = false;
+
+	lockdep_assert_held_write(&kvm->mmu_lock);
+	for_each_tdp_mmu_root(kvm, root, slot->as_id)
+		spte_set |= set_wp_gfn(kvm, root, gfn);
+
+	return spte_set;
+}
+
+static bool clear_wp_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
+			 gfn_t gfn)
+{
+	struct tdp_iter iter;
+	u64 new_spte;
+	bool spte_set = false;
+
+	rcu_read_lock();
+
+	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
+		if (!is_shadow_present_pte(iter.old_spte) ||
+		    !is_last_spte(iter.old_spte, iter.level))
+			continue;
+
+		/* Set writable bit (bit 1 in EPT) */
+		new_spte = iter.old_spte | VMX_EPT_WRITABLE_MASK;
+
+		if (new_spte == iter.old_spte)
+			break;
+
+		tdp_mmu_iter_set_spte(kvm, &iter, new_spte);
+		spte_set = true;
+	}
+
+	rcu_read_unlock();
+
+	return spte_set;
+}
+
+bool kvm_tdp_mmu_clear_wp_gfn(struct kvm *kvm,
+			      struct kvm_memory_slot *slot, gfn_t gfn)
+{
+	struct kvm_mmu_page *root;
+	bool spte_set = false;
+
+	lockdep_assert_held_write(&kvm->mmu_lock);
+	for_each_tdp_mmu_root(kvm, root, slot->as_id)
+		spte_set |= clear_wp_gfn(kvm, root, gfn);
+
+	return spte_set;
+}
 #endif /* CONFIG_KVM_NYX */
 
 /*
