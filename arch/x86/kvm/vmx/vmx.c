@@ -5919,8 +5919,21 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 				current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
 				if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 				    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
-					/* Non-target process — clear WP, let MMU resolve */
-					clear_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap);
+					/*
+					 * Non-target process hit a WP-protected page.
+					 * DO NOT clear the bitmap bit — that would
+					 * permanently disable WtE tracking for this GFN,
+					 * causing missed detections when the target process
+					 * subsequently writes the same page (e.g. VMProtect /
+					 * Themida internal threads patching PE sections).
+					 *
+					 * Instead, drop the spinlock and fall through to
+					 * kvm_mmu_page_fault(). The TDP walker hook in
+					 * tdp_mmu_map_handle_target_level() will re-apply
+					 * WP on the freshly created SPTE from the bitmap,
+					 * so the protection is automatically restored after
+					 * the fault is resolved.
+					 */
 					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
 					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 				}
@@ -5945,7 +5958,13 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 				current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
 				if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 				    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
-					clear_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
+					/*
+					 * Non-target process hit an NX-protected page.
+					 * Same reasoning as the WP case above: preserve
+					 * the bitmap bit so TDP walker re-applies NX when
+					 * the SPTE is recreated. Clearing here would let
+					 * the target process execute the page unchecked.
+					 */
 					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
 					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 				}
