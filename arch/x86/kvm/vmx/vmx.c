@@ -5960,27 +5960,14 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 				    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
 					/*
 					 * Non-target process hit an NX-protected page.
-					 * Preserve bitmap bit so TDP walker re-applies NX.
+					 * Same reasoning as the WP case above: preserve
+					 * the bitmap bit so TDP walker re-applies NX when
+					 * the SPTE is recreated. Clearing here would let
+					 * the target process execute the page unchecked.
 					 */
 					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
 					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 				}
-
-				/*
-				 * Target CR3 match. Check CPL to distinguish
-				 * user-mode (packer exec) from kernel-mode (syscall).
-				 * Auto-NX sets NX on ALL pages for target CR3
-				 * including kernel pages (Windows shares CR3 when
-				 * KPTI is off).  For kernel exec (CPL=0), silently
-				 * clear NX and resume — no QEMU exit needed.
-				 */
-				if (vmx_get_cpl(vcpu) != 3) {
-					/* Kernel exec: clear NX bitmap + SPTE, resume */
-					clear_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
-					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
-					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
-				}
-
 				spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
 				vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
 				vcpu->run->kafl_wte.gfn = gfn;
