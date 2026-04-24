@@ -5982,33 +5982,24 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 			/*
 			 * Auto-NX: fetch violation on a page NOT in nx_bitmap
 			 * but NX'd by tdp_mmu auto-NX (target CR3 match).
-			 *   CPL=0 (kernel): mark auto_nx_skip, resolve fault
-			 *   CPL=3 (user):   set nx_bitmap, exit to QEMU (WtE)
+			 * Kernel never does instruction fetch from user pages,
+			 * so this is always CPL=3.  Set nx_bitmap and exit to
+			 * QEMU for WtE/DLL handling.
 			 */
 			current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
 			if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 			    current_cr3 == vcpu->kvm->arch.wte_target_cr3 &&
 			    gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
-				if (vmx_get_cpl(vcpu) == 3) {
-					/* User exec → WtE detection */
-					spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
-					set_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
-					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
-					vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
-					vcpu->run->kafl_wte.gfn = gfn;
-					vcpu->run->kafl_wte.gpa = gpa;
-					vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
-					vcpu->run->kafl_wte.cr3 = current_cr3;
-					vcpu->run->kafl_wte.type = 0;
-					return 0;
-				} else {
-					/* Kernel exec → skip future auto-NX */
-					spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
-					if (vcpu->kvm->arch.wte_auto_nx_skip)
-						set_bit(gfn, vcpu->kvm->arch.wte_auto_nx_skip);
-					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
-					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
-				}
+				spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
+				set_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
+				spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+				vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
+				vcpu->run->kafl_wte.gfn = gfn;
+				vcpu->run->kafl_wte.gpa = gpa;
+				vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
+				vcpu->run->kafl_wte.cr3 = current_cr3;
+				vcpu->run->kafl_wte.type = 0;
+				return 0;
 			}
 		}
 wte_skip:

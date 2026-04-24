@@ -974,21 +974,14 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
 	    !is_mmio_spte(new_spte)) {
-		/* Auto-NX: target CR3 → all new pages get X=0.
-		 * Skip GFNs in auto_nx_skip bitmap (kernel pages that were
-		 * already NX'd and cleared via CPL=0 violation handler).
-		 * Does NOT touch nx_bitmap — that's managed by vmx.c
-		 * violation handler and QEMU-side set_nx ioctls only. */
+		/* Auto-NX: target CR3 → all new user pages get X=0.
+		 * Kernel never does instruction fetch from user pages, so
+		 * fetch violations only fire at CPL=3 (user code).
+		 * No skip bitmap needed — kernel read/write of user pages
+		 * causes data violations (not fetch), handled separately. */
 		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 		    vcpu->arch.cr3 == vcpu->kvm->arch.wte_target_cr3) {
-			gfn_t gfn_check = iter->gfn;
-			bool skip = false;
-			if (gfn_check < vcpu->kvm->arch.wte_nx_bitmap_max &&
-			    vcpu->kvm->arch.wte_auto_nx_skip &&
-			    test_bit(gfn_check, vcpu->kvm->arch.wte_auto_nx_skip))
-				skip = true;
-			if (!skip)
-				new_spte &= ~shadow_x_mask;
+			new_spte &= ~shadow_x_mask;
 		}
 
 		/* Bitmap-based WP/NX (PE pages + QEMU-side dynamic NX) */
