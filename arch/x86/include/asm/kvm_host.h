@@ -1518,6 +1518,8 @@ struct kvm_arch {
 	bool wte_enabled;
 	unsigned long *wte_nx_bitmap;      /* bitmap of GFNs with WtE NX set */
 	unsigned long *wte_wp_bitmap;      /* bitmap of GFNs with WtE WP set */
+	unsigned long *wte_auto_nx_skip;   /* bitmap: kernel-cleared auto-NX GFNs
+	                                    * (don't re-apply auto-NX on these) */
 	unsigned long wte_nx_bitmap_max;   /* max GFN tracked (bitmap size in bits) */
 	spinlock_t wte_lock;               /* protects bitmap + SPTE updates */
 	uint64_t wte_target_cr3;            /* target process CR3 for filtering */

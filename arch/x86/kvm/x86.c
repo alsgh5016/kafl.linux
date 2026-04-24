@@ -7365,6 +7365,16 @@ set_pit2_out:
 			mutex_unlock(&kvm->lock);
 			break;
 		}
+		kvm->arch.wte_auto_nx_skip = bitmap_zalloc(max_gfn, GFP_KERNEL);
+		if (!kvm->arch.wte_auto_nx_skip) {
+			bitmap_free(kvm->arch.wte_wp_bitmap);
+			bitmap_free(kvm->arch.wte_nx_bitmap);
+			kvm->arch.wte_wp_bitmap = NULL;
+			kvm->arch.wte_nx_bitmap = NULL;
+			r = -ENOMEM;
+			mutex_unlock(&kvm->lock);
+			break;
+		}
 		kvm->arch.wte_nx_bitmap_max = max_gfn;
 		spin_lock_init(&kvm->arch.wte_lock);
 		kvm->arch.wte_enabled = true;
@@ -7402,6 +7412,8 @@ set_pit2_out:
 		kvm->arch.wte_nx_bitmap = NULL;
 		bitmap_free(kvm->arch.wte_wp_bitmap);
 		kvm->arch.wte_wp_bitmap = NULL;
+		bitmap_free(kvm->arch.wte_auto_nx_skip);
+		kvm->arch.wte_auto_nx_skip = NULL;
 		kvm->arch.wte_nx_bitmap_max = 0;
 		r = 0;
 		mutex_unlock(&kvm->lock);
