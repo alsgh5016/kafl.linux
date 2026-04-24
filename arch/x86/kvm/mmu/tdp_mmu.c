@@ -960,12 +960,27 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 					 fault->map_writable, &new_spte);
 
 #ifdef CONFIG_KVM_NYX
-	/* WtE: enforce EPT protections from bitmaps on newly created SPTEs.
-	 * After snapshot restore, EPT is flushed and entries are re-created
-	 * on demand via page faults. We must apply WP/NX at creation time,
-	 * otherwise the protections set by wte_protect_pe_range() are lost. */
+	/* WtE: enforce EPT protections on newly created SPTEs.
+	 *
+	 * Two layers:
+	 * 1. Auto-NX for target CR3: ANY new page mapped by the target
+	 *    process gets NX automatically.  This catches dynamically
+	 *    allocated regions (e.g., amber packer's VirtualAlloc) that
+	 *    don't exist at WTE_SETUP time.  The QEMU-side exec violation
+	 *    handler uses the DLL filter to allow known DLLs quickly.
+	 *
+	 * 2. Bitmap-based WP/NX: for PE pages that need both W=0 and X=0
+	 *    (set explicitly by wte_protect_pe_range).
+	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
 	    !is_mmio_spte(new_spte)) {
+		/* Auto-NX: target CR3 → all new user pages get X=0 */
+		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
+		    vcpu->arch.cr3 == vcpu->kvm->arch.wte_target_cr3) {
+			new_spte &= ~shadow_x_mask;
+		}
+
+		/* Bitmap-based WP/NX (PE pages) */
 		gfn_t gfn = iter->gfn;
 		if (gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
 			if (vcpu->kvm->arch.wte_nx_bitmap &&
