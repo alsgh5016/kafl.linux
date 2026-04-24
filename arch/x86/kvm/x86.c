@@ -7453,6 +7453,12 @@ set_pit2_out:
 				flush |= kvm_mmu_slot_gfn_set_nx(kvm, slot, gfn);
 		}
 		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+
+		/* Also walk ALL existing SPTEs and apply NX from bitmap.
+		 * set_nx_gfn may miss SPTEs that were created before the
+		 * bitmap was set (e.g., pre-existing shared pages). */
+		flush |= (kvm_mmu_enforce_nx_all(kvm) > 0);
+
 		if (flush)
 			kvm_flush_remote_tlbs(kvm);
 		write_unlock(&kvm->mmu_lock);

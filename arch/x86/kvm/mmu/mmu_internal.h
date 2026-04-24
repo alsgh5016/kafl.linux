@@ -175,6 +175,7 @@ bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
 #ifdef CONFIG_KVM_NYX
 bool kvm_mmu_slot_gfn_set_nx(struct kvm *kvm,
 			     struct kvm_memory_slot *slot, u64 gfn);
+int kvm_mmu_enforce_nx_all(struct kvm *kvm);
 bool kvm_mmu_slot_gfn_clear_nx(struct kvm *kvm,
 			       struct kvm_memory_slot *slot, u64 gfn);
 bool kvm_mmu_slot_gfn_set_wp(struct kvm *kvm,

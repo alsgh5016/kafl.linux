@@ -1445,6 +1445,13 @@ bool kvm_mmu_slot_gfn_set_nx(struct kvm *kvm,
 	return nx_set;
 }
 
+int kvm_mmu_enforce_nx_all(struct kvm *kvm)
+{
+	if (tdp_mmu_enabled)
+		return kvm_tdp_mmu_enforce_nx_all(kvm);
+	return 0;
+}
+
 bool kvm_mmu_slot_gfn_clear_nx(struct kvm *kvm,
 			       struct kvm_memory_slot *slot, u64 gfn)
 {

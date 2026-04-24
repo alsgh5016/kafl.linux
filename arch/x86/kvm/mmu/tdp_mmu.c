@@ -1838,6 +1838,46 @@ bool kvm_tdp_mmu_set_nx_gfn(struct kvm *kvm,
 }
 
 /*
+ * Walk ALL leaf SPTEs and apply NX from the nx_bitmap.
+ * Called after rescan sets bitmap bits to ensure existing SPTEs
+ * get NX applied — not just newly created ones.
+ * Returns number of SPTEs modified.
+ */
+int kvm_tdp_mmu_enforce_nx_all(struct kvm *kvm)
+{
+	struct kvm_mmu_page *root;
+	struct tdp_iter iter;
+	int modified = 0;
+
+	lockdep_assert_held_write(&kvm->mmu_lock);
+
+	if (!kvm->arch.wte_nx_bitmap)
+		return 0;
+
+	for_each_tdp_mmu_root(kvm, root, 0) {
+		rcu_read_lock();
+		tdp_root_for_each_leaf_pte(iter, root) {
+			gfn_t gfn = iter.gfn;
+			u64 new_spte;
+
+			if (gfn >= kvm->arch.wte_nx_bitmap_max)
+				continue;
+			if (!test_bit(gfn, kvm->arch.wte_nx_bitmap))
+				continue;
+			if (!(iter.old_spte & shadow_x_mask))
+				continue; /* already NX */
+
+			new_spte = iter.old_spte & ~shadow_x_mask;
+			tdp_mmu_iter_set_spte(kvm, &iter, new_spte);
+			modified++;
+		}
+		rcu_read_unlock();
+	}
+
+	return modified;
+}
+
+/*
  * Restores the execute permission on the last level SPTE mapping this GFN.
  * Used after WtE detection to allow guest execution to proceed.
  * Returns true if an SPTE was modified and a TLB flush is needed.
