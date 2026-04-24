@@ -974,15 +974,22 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
 	    !is_mmio_spte(new_spte)) {
-		/* Auto-NX: target CR3 + user-mode (CPL==3) → new pages get X=0.
-		 * EPT violations don't set PFERR_USER_MASK, so we check the
-		 * guest CPL directly.  Windows shares CR3 between user/kernel
-		 * when KPTI is off — without CPL check, kernel code pages
-		 * would be NX'd, crashing the guest. */
+		/* Auto-NX: target CR3 → all new pages get X=0.
+		 * Also set the NX bitmap bit so the violation handler in
+		 * vmx.c can find it (handler checks bitmap, not SPTE).
+		 * Without bitmap bit, handler falls through to recreate
+		 * SPTE → auto-NX again → infinite violation loop.
+		 *
+		 * Kernel pages (CPL=0 at violation time) are handled by
+		 * vmx.c: silently clear NX and resume without QEMU exit. */
 		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
-		    vcpu->arch.cr3 == vcpu->kvm->arch.wte_target_cr3 &&
-		    static_call(kvm_x86_get_cpl)(vcpu) == 3) {
+		    vcpu->arch.cr3 == vcpu->kvm->arch.wte_target_cr3) {
 			new_spte &= ~shadow_x_mask;
+			/* Set bitmap so violation handler recognizes this GFN */
+			if (vcpu->kvm->arch.wte_nx_bitmap &&
+			    iter->gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
+				set_bit(iter->gfn, vcpu->kvm->arch.wte_nx_bitmap);
+			}
 		}
 
 		/* Bitmap-based WP/NX (PE pages) */
