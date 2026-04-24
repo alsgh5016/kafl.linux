@@ -974,13 +974,14 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
 	    !is_mmio_spte(new_spte)) {
-		/* Auto-NX: target CR3 + user-mode fault → new user pages get X=0.
-		 * Only apply to user-mode page faults (PFERR_USER_MASK) to avoid
-		 * NX-ing kernel pages — Windows shares CR3 between user/kernel
-		 * when KPTI is off, so we must check CPL via fault->user. */
+		/* Auto-NX: target CR3 + user-mode (CPL==3) → new pages get X=0.
+		 * EPT violations don't set PFERR_USER_MASK, so we check the
+		 * guest CPL directly.  Windows shares CR3 between user/kernel
+		 * when KPTI is off — without CPL check, kernel code pages
+		 * would be NX'd, crashing the guest. */
 		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 		    vcpu->arch.cr3 == vcpu->kvm->arch.wte_target_cr3 &&
-		    fault->user) {
+		    static_call(kvm_x86_get_cpl)(vcpu) == 3) {
 			new_spte &= ~shadow_x_mask;
 		}
 
