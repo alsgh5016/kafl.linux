@@ -974,20 +974,16 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
 	    !is_mmio_spte(new_spte)) {
-		/* Auto-NX: target CR3 → all new user pages get X=0.
-		 * Also set nx_bitmap bit so that if this SPTE is evicted
-		 * and recreated in a DIFFERENT process's context (where
-		 * CR3 != target_cr3 and auto-NX won't fire), the bitmap
-		 * check below still applies NX.  Without bitmap, SPTE
-		 * recreation in non-target context gets X=1 → miss.
-		 * QEMU clears bitmap via clear_nx ioctl after allowing. */
-		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
-		    vcpu->arch.cr3 == vcpu->kvm->arch.wte_target_cr3) {
-			new_spte &= ~shadow_x_mask;
-			if (vcpu->kvm->arch.wte_nx_bitmap &&
-			    iter->gfn < vcpu->kvm->arch.wte_nx_bitmap_max)
-				set_bit(iter->gfn, vcpu->kvm->arch.wte_nx_bitmap);
-		}
+		/* Auto-NX: set X=0 on ALL new SPTEs (CR3-independent).
+		 * Shared physical pages can be accessed by non-target
+		 * processes first, creating SPTEs without NX.  Target
+		 * process then uses the same SPTE → misses NX.
+		 *
+		 * By NX-ing unconditionally:
+		 *   - Non-target exec → vmx.c: CR3 mismatch → resolve
+		 *   - Target exec → vmx.c: CR3 match → WtE detection
+		 * One-time cost per unique page (~50K violations at boot). */
+		new_spte &= ~shadow_x_mask;
 
 		/* Bitmap-based WP/NX (PE pages + QEMU-side dynamic NX) */
 		gfn_t gfn = iter->gfn;
@@ -1000,18 +996,8 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 				new_spte &= ~PT_WRITABLE_MASK;
 		}
 
-		/* Diagnostic: log ALL SPTE creations in amber GFN range */
-		if (gfn >= 0x6d720 && gfn <= 0x6d730) {
-			pr_info("[WtE-DIAG] SPTE GFN=0x%llx lvl=%d "
-				"cr3=0x%llx target=0x%llx NX=%d bm=%d\n",
-				(u64)gfn, iter->level,
-				(u64)vcpu->arch.cr3,
-				(u64)vcpu->kvm->arch.wte_target_cr3,
-				!(new_spte & shadow_x_mask),
-				(vcpu->kvm->arch.wte_nx_bitmap &&
-				 gfn < vcpu->kvm->arch.wte_nx_bitmap_max) ?
-				test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap) : 0);
-		}
+		/* (diagnostic removed — root cause found: CR3 mismatch
+		 * on shared pages, fixed by CR3-independent auto-NX) */
 	}
 #endif
 
