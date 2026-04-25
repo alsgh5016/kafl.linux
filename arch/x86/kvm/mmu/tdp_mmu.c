@@ -1856,7 +1856,7 @@ int kvm_tdp_mmu_enforce_nx_all(struct kvm *kvm)
 
 	for_each_tdp_mmu_root(kvm, root, 0) {
 		rcu_read_lock();
-		tdp_root_for_each_leaf_pte(iter, root) {
+		tdp_root_for_each_leaf_pte(iter, root, 0, kvm->arch.wte_nx_bitmap_max) {
 			gfn_t gfn = iter.gfn;
 			u64 new_spte;
 
