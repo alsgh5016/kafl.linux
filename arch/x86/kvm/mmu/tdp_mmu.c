@@ -974,16 +974,15 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
 	    !is_mmio_spte(new_spte)) {
-		/* Auto-NX: set X=0 on ALL new SPTEs (CR3-independent).
-		 * Shared physical pages can be accessed by non-target
-		 * processes first, creating SPTEs without NX.  Target
-		 * process then uses the same SPTE → misses NX.
-		 *
-		 * By NX-ing unconditionally:
-		 *   - Non-target exec → vmx.c: CR3 mismatch → resolve
-		 *   - Target exec → vmx.c: CR3 match → WtE detection
-		 * One-time cost per unique page (~50K violations at boot). */
-		new_spte &= ~shadow_x_mask;
+		/* Auto-NX: target CR3 → new user pages get X=0.
+		 * Also set nx_bitmap for SPTE eviction persistence. */
+		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
+		    vcpu->arch.cr3 == vcpu->kvm->arch.wte_target_cr3) {
+			new_spte &= ~shadow_x_mask;
+			if (vcpu->kvm->arch.wte_nx_bitmap &&
+			    iter->gfn < vcpu->kvm->arch.wte_nx_bitmap_max)
+				set_bit(iter->gfn, vcpu->kvm->arch.wte_nx_bitmap);
+		}
 
 		/* Bitmap-based WP/NX (PE pages + QEMU-side dynamic NX) */
 		gfn_t gfn = iter->gfn;
