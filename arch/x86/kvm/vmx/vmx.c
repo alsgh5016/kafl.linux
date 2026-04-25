@@ -58,6 +58,12 @@
 #include "lapic.h"
 #include "mmu.h"
 #include "nested.h"
+
+#ifdef CONFIG_KVM_NYX
+/* From mmu/mmu.c — needed for in-place NX clear on non-target pages */
+extern bool kvm_mmu_slot_gfn_clear_nx(struct kvm *kvm,
+				       struct kvm_memory_slot *slot, u64 gfn);
+#endif
 #include "pmu.h"
 #include "sgx.h"
 #include "trace.h"
