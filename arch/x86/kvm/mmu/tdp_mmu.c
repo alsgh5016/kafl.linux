@@ -999,6 +999,19 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 			    test_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap))
 				new_spte &= ~PT_WRITABLE_MASK;
 		}
+
+		/* Diagnostic: log ALL SPTE creations in amber GFN range */
+		if (gfn >= 0x6d720 && gfn <= 0x6d730) {
+			pr_info("[WtE-DIAG] SPTE GFN=0x%llx lvl=%d "
+				"cr3=0x%llx target=0x%llx NX=%d bm=%d\n",
+				(u64)gfn, iter->level,
+				(u64)vcpu->arch.cr3,
+				(u64)vcpu->kvm->arch.wte_target_cr3,
+				!(new_spte & shadow_x_mask),
+				(vcpu->kvm->arch.wte_nx_bitmap &&
+				 gfn < vcpu->kvm->arch.wte_nx_bitmap_max) ?
+				test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap) : 0);
+		}
 	}
 #endif
 
