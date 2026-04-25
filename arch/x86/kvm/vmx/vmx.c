@@ -5981,25 +5981,43 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 
 			/*
 			 * Auto-NX: fetch violation on a page NOT in nx_bitmap
-			 * but NX'd by tdp_mmu auto-NX (target CR3 match).
-			 * Kernel never does instruction fetch from user pages,
-			 * so this is always CPL=3.  Set nx_bitmap and exit to
-			 * QEMU for WtE/DLL handling.
+			 * but NX'd by unconditional auto-NX in tdp_mmu.
+			 *
+			 * Target CR3: set bitmap + exit to QEMU (WtE/DLL).
+			 * Non-target CR3: clear NX in-place on the SPTE.
+			 *   Don't call kvm_mmu_page_fault (would recreate
+			 *   SPTE → auto-NX → NX again → infinite loop).
 			 */
 			current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
-			if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
-			    current_cr3 == vcpu->kvm->arch.wte_target_cr3 &&
-			    gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
-				spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
-				set_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
-				spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
-				vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
-				vcpu->run->kafl_wte.gfn = gfn;
-				vcpu->run->kafl_wte.gpa = gpa;
-				vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
-				vcpu->run->kafl_wte.cr3 = current_cr3;
-				vcpu->run->kafl_wte.type = 0;
-				return 0;
+			if (gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
+				if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
+				    current_cr3 == vcpu->kvm->arch.wte_target_cr3) {
+					/* Target: WtE detection */
+					spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
+					set_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
+					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+					vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
+					vcpu->run->kafl_wte.gfn = gfn;
+					vcpu->run->kafl_wte.gpa = gpa;
+					vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
+					vcpu->run->kafl_wte.cr3 = current_cr3;
+					vcpu->run->kafl_wte.type = 0;
+					return 0;
+				} else {
+					/* Non-target: clear NX in-place, no loop.
+					 * Need mmu_lock for SPTE modification. */
+					struct kvm_memory_slot *nx_slot;
+					bool nx_flushed = false;
+					write_lock(&vcpu->kvm->mmu_lock);
+					nx_slot = gfn_to_memslot(vcpu->kvm, gfn);
+					if (nx_slot)
+						nx_flushed = kvm_mmu_slot_gfn_clear_nx(
+							vcpu->kvm, nx_slot, gfn);
+					if (nx_flushed)
+						kvm_flush_remote_tlbs(vcpu->kvm);
+					write_unlock(&vcpu->kvm->mmu_lock);
+					return 1; /* handled */
+				}
 			}
 		}
 wte_skip:
