@@ -7449,8 +7449,13 @@ set_pit2_out:
 			    gfn >= kvm->arch.wte_nx_bitmap_max)
 				continue;
 
-			if (test_and_set_bit(gfn, kvm->arch.wte_nx_bitmap))
-				continue; /* already NX */
+			/* Always set bit (idempotent) AND always try the SPTE
+			 * update.  Previous code skipped SPTE when bitmap was
+			 * already set, but the SPTE may not have existed at
+			 * the original set_nx (lazy creation) — re-applying is
+			 * required so freshly-faulted SPTEs get NX promptly,
+			 * which the API hook return-path depends on. */
+			set_bit(gfn, kvm->arch.wte_nx_bitmap);
 
 			slot = gfn_to_memslot(kvm, gfn);
 			if (slot)
