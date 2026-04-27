@@ -15,6 +15,7 @@
 
 #include "nyx_hook.h"
 #include "mmu/mmu_internal.h"
+#include "kvm_cache_regs.h"
 
 #ifdef CONFIG_KVM_NYX
 
