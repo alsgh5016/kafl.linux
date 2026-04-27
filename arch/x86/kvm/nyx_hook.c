@@ -134,6 +134,7 @@ int nyx_step_over_begin(struct kvm_vcpu *vcpu, gfn_t gfn)
 {
 	struct kvm *kvm = vcpu->kvm;
 	struct kvm_memory_slot *slot;
+	unsigned long flags;
 	bool flushed = false;
 
 	if (vcpu->arch.nyx_step_active) {
@@ -146,6 +147,16 @@ int nyx_step_over_begin(struct kvm_vcpu *vcpu, gfn_t gfn)
 	}
 
 	write_lock(&kvm->mmu_lock);
+	/* Temporarily remove from nx_bitmap so a concurrent SET_NX ioctl
+	 * (or its enforce_nx_all sweep) running while we are in userspace
+	 * dispatch cannot re-apply NX to the SPTE we just cleared.
+	 * Restored in nyx_step_over_complete. */
+	spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+	if (kvm->arch.wte_nx_bitmap &&
+	    gfn < kvm->arch.wte_nx_bitmap_max)
+		clear_bit(gfn, kvm->arch.wte_nx_bitmap);
+	spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+
 	slot = gfn_to_memslot(kvm, gfn);
 	if (slot)
 		flushed = kvm_mmu_slot_gfn_clear_nx(kvm, slot, gfn);
@@ -174,9 +185,18 @@ int nyx_step_over_complete(struct kvm_vcpu *vcpu)
 	struct kvm *kvm = vcpu->kvm;
 	struct kvm_memory_slot *slot;
 	gfn_t gfn = vcpu->arch.nyx_step_restore_gfn;
+	unsigned long flags;
 	bool flushed = false;
 
 	write_lock(&kvm->mmu_lock);
+	/* Restore bitmap entry — pairs with the temporary clear in
+	 * nyx_step_over_begin. */
+	spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+	if (kvm->arch.wte_nx_bitmap &&
+	    gfn < kvm->arch.wte_nx_bitmap_max)
+		set_bit(gfn, kvm->arch.wte_nx_bitmap);
+	spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+
 	slot = gfn_to_memslot(kvm, gfn);
 	if (slot)
 		flushed = kvm_mmu_slot_gfn_set_nx(kvm, slot, gfn);
