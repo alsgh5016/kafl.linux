@@ -11,6 +11,7 @@
 #include <linux/spinlock.h>
 #include <linux/printk.h>
 #include <linux/errno.h>
+#include <linux/module.h>
 
 #include "nyx_hook.h"
 #include "mmu/mmu_internal.h"
@@ -35,6 +36,7 @@ bool nyx_hook_match(struct kvm *kvm, u64 rip, u64 *hook_id_out)
 	spin_unlock_irqrestore(&kvm->arch.nyx_hook_lock, flags);
 	return matched;
 }
+EXPORT_SYMBOL_GPL(nyx_hook_match);
 
 bool nyx_hook_page_has_any(struct kvm *kvm, gfn_t gfn)
 {
@@ -52,6 +54,7 @@ bool nyx_hook_page_has_any(struct kvm *kvm, gfn_t gfn)
 	spin_unlock_irqrestore(&kvm->arch.nyx_hook_lock, flags);
 	return has;
 }
+EXPORT_SYMBOL_GPL(nyx_hook_page_has_any);
 
 int nyx_hook_add(struct kvm *kvm, u64 rip, u64 hook_id)
 {
@@ -145,6 +148,7 @@ int nyx_step_over_begin(struct kvm_vcpu *vcpu, gfn_t gfn)
 
 	return 1; /* resume guest, no userspace exit */
 }
+EXPORT_SYMBOL_GPL(nyx_step_over_begin);
 
 int nyx_step_over_complete(struct kvm_vcpu *vcpu)
 {
@@ -166,5 +170,6 @@ int nyx_step_over_complete(struct kvm_vcpu *vcpu)
 
 	return 1; /* resume guest, no userspace exit */
 }
+EXPORT_SYMBOL_GPL(nyx_step_over_complete);
 
 #endif /* CONFIG_KVM_NYX */
