@@ -479,6 +479,14 @@ struct kvm_run {
 			__u32 type;  /* 0=execute violation, 1=write violation */
 			__u32 pad;
 		} kafl_wte;
+		/* KVM_EXIT_KAFL_NYX_HOOK */
+		struct {
+			__u64 gfn;
+			__u64 gpa;
+			__u64 rip;
+			__u64 cr3;
+			__u64 hook_id;
+		} kafl_nyx_hook;
 		/* Fix the size of the union. */
 		char padding[256];
 	};
@@ -2284,6 +2292,7 @@ struct kvm_s390_zpci_op {
 
 #define KVM_EXIT_KAFL_WTE				142
 #define KVM_EXIT_KAFL_WTE_SETUP			143
+#define KVM_EXIT_KAFL_NYX_HOOK			144
 
 
 /*
@@ -2345,10 +2354,22 @@ struct kvm_s390_zpci_op {
 #define KVM_NYX_WTE_SET_WP					_IOW(KVMIO,	0xf7, struct kvm_nyx_wte_gfns)
 #define KVM_NYX_WTE_CLEAR_WP				_IOW(KVMIO,	0xf8, struct kvm_nyx_wte_gfns)
 
+/* Nyx in-kernel API hook table — RIP-filtered EPT exec violations */
+#define KVM_NYX_HOOK_ADD					_IOW(KVMIO,	0xf9, struct kvm_nyx_hook_entry)
+#define KVM_NYX_HOOK_REMOVE					_IOW(KVMIO,	0xfa, struct kvm_nyx_hook_entry)
+#define KVM_NYX_HOOK_CLEAR					_IO (KVMIO,	0xfb)
+
 struct kvm_nyx_wte_gfns {
 	__u32 count;
 	__u32 flags;			/* reserved */
 	__u64 gfns[];			/* flexible array of GFNs */
+};
+
+struct kvm_nyx_hook_entry {
+	__u64 rip;			/* exact guest RIP to match */
+	__u64 hook_id;			/* opaque ID returned to userspace on hit */
+	__u32 flags;			/* reserved */
+	__u32 pad;
 };
 
 

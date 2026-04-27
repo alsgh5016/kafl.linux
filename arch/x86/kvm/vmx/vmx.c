@@ -64,6 +64,9 @@
 #include "vmcs.h"
 #include "vmcs12.h"
 #include "vmx.h"
+#ifdef CONFIG_KVM_NYX
+#include "../nyx_hook.h"
+#endif
 #include "x86.h"
 #include "smm.h"
 #include "vmx_onhyperv.h"
@@ -5969,6 +5972,31 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 				}
 				spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
+
+				/*
+				 * Nyx in-kernel API hook filter:
+				 * If this page has registered hooks, only matching
+				 * RIPs exit to userspace.  Non-matching instructions
+				 * are stepped over in-kernel via MTF (no QEMU exit).
+				 * Hook pages do NOT participate in WtE detection;
+				 * they exist solely for API instrumentation.
+				 */
+				if (nyx_hook_page_has_any(vcpu->kvm, gfn)) {
+					u64 rip = kvm_rip_read(vcpu);
+					u64 hook_id = 0;
+
+					if (nyx_hook_match(vcpu->kvm, rip, &hook_id)) {
+						vcpu->run->exit_reason = KVM_EXIT_KAFL_NYX_HOOK;
+						vcpu->run->kafl_nyx_hook.gfn = gfn;
+						vcpu->run->kafl_nyx_hook.gpa = gpa;
+						vcpu->run->kafl_nyx_hook.rip = rip;
+						vcpu->run->kafl_nyx_hook.cr3 = current_cr3;
+						vcpu->run->kafl_nyx_hook.hook_id = hook_id;
+						return 0;
+					}
+					return nyx_step_over_begin(vcpu, gfn);
+				}
+
 				vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
 				vcpu->run->kafl_wte.gfn = gfn;
 				vcpu->run->kafl_wte.gpa = gpa;
@@ -6154,6 +6182,12 @@ static int handle_pause(struct kvm_vcpu *vcpu)
 static int handle_monitor_trap(struct kvm_vcpu *vcpu)
 {
 #ifdef CONFIG_KVM_NYX
+	/* In-kernel hook step-over: re-NX the page and resume without
+	 * userspace exit.  Must be checked BEFORE the legacy mtf path
+	 * because nyx_step_active sets vcpu->arch.mtf too. */
+	if (vcpu->arch.nyx_step_active)
+		return nyx_step_over_complete(vcpu);
+
 	if (vcpu->arch.mtf){
 		vcpu->run->exit_reason = KVM_EXIT_KAFL_MTF;
 		return 0;

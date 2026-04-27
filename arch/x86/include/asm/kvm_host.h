@@ -1044,6 +1044,13 @@ struct kvm_vcpu_arch {
 	u64 page_dump_bp_cr3;
 	bool mtf;
 	bool mtf_on;
+
+	/* Nyx in-kernel hook step-over state.
+	 * When active, MTF fires after one instruction; the MTF handler
+	 * re-applies NX on restore_gfn and resumes guest without exiting
+	 * to userspace. */
+	bool   nyx_step_active;
+	gfn_t  nyx_step_restore_gfn;
 #endif
 
 #if IS_ENABLED(CONFIG_HYPERV)
@@ -1521,6 +1528,17 @@ struct kvm_arch {
 	unsigned long wte_nx_bitmap_max;   /* max GFN tracked (bitmap size in bits) */
 	spinlock_t wte_lock;               /* protects bitmap + SPTE updates */
 	uint64_t wte_target_cr3;            /* target process CR3 for filtering */
+
+	/* Nyx in-kernel API hook table.
+	 * EPT exec violations on hook pages are filtered by RIP: matching
+	 * RIPs exit to QEMU as KVM_EXIT_KAFL_NYX_HOOK; non-matching RIPs are
+	 * stepped over in-kernel via MTF, no userspace round-trip. */
+	struct kvm_nyx_hook_kern {
+		u64 rip;
+		u64 hook_id;
+	} nyx_hooks[64];
+	int        nyx_hook_count;
+	spinlock_t nyx_hook_lock;
 #endif
 };
 

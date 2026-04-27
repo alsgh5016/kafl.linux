@@ -89,6 +89,7 @@
 #ifdef CONFIG_KVM_NYX
 #include "vmx/vmx_pt.h"
 #include "mmu/mmu_internal.h"
+#include "nyx_hook.h"
 #endif
 
 #define CREATE_TRACE_POINTS
@@ -7367,6 +7368,8 @@ set_pit2_out:
 		}
 		kvm->arch.wte_nx_bitmap_max = max_gfn;
 		spin_lock_init(&kvm->arch.wte_lock);
+		spin_lock_init(&kvm->arch.nyx_hook_lock);
+		kvm->arch.nyx_hook_count = 0;
 		kvm->arch.wte_enabled = true;
 		r = 0;
 		mutex_unlock(&kvm->lock);
@@ -7403,6 +7406,7 @@ set_pit2_out:
 		bitmap_free(kvm->arch.wte_wp_bitmap);
 		kvm->arch.wte_wp_bitmap = NULL;
 		kvm->arch.wte_nx_bitmap_max = 0;
+		nyx_hook_clear(kvm);
 		r = 0;
 		mutex_unlock(&kvm->lock);
 		break;
@@ -7645,6 +7649,31 @@ set_pit2_out:
 		write_unlock(&kvm->mmu_lock);
 
 		kfree(gfn_array);
+		r = 0;
+		break;
+	}
+	case KVM_NYX_HOOK_ADD: {
+		struct kvm_nyx_hook_entry entry;
+
+		if (copy_from_user(&entry, argp, sizeof(entry))) {
+			r = -EFAULT;
+			break;
+		}
+		r = nyx_hook_add(kvm, entry.rip, entry.hook_id);
+		break;
+	}
+	case KVM_NYX_HOOK_REMOVE: {
+		struct kvm_nyx_hook_entry entry;
+
+		if (copy_from_user(&entry, argp, sizeof(entry))) {
+			r = -EFAULT;
+			break;
+		}
+		r = nyx_hook_remove(kvm, entry.rip);
+		break;
+	}
+	case KVM_NYX_HOOK_CLEAR: {
+		nyx_hook_clear(kvm);
 		r = 0;
 		break;
 	}

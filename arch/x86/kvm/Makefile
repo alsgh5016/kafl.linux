@@ -14,6 +14,8 @@ kvm-y			+= x86.o emulate.o i8259.o irq.o lapic.o \
 			   debugfs.o mmu/mmu.o mmu/page_track.o \
 			   mmu/spte.o
 
+kvm-$(CONFIG_KVM_NYX)	+= nyx_hook.o
+
 kvm-$(CONFIG_X86_64) += mmu/tdp_iter.o mmu/tdp_mmu.o
 kvm-$(CONFIG_KVM_HYPERV) += hyperv.o
 kvm-$(CONFIG_KVM_XEN)	+= xen.o
