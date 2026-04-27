@@ -5992,6 +5992,21 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 						vcpu->run->kafl_nyx_hook.rip = rip;
 						vcpu->run->kafl_nyx_hook.cr3 = current_cr3;
 						vcpu->run->kafl_nyx_hook.hook_id = hook_id;
+						/*
+						 * Arm in-kernel single-step on this page so
+						 * the matched instruction actually advances
+						 * after userspace dispatch returns.  Without
+						 * this, the page stays NX'd and re-entry
+						 * triggers the same hook in an infinite loop.
+						 *
+						 * step_over_begin sets X=1, arms MTF, and
+						 * marks nyx_step_active.  On the next vCPU
+						 * resume the MTF VM-exit fires after one
+						 * instruction; handle_monitor_trap calls
+						 * step_over_complete to re-NX the page —
+						 * no userspace round-trip on the step.
+						 */
+						(void)nyx_step_over_begin(vcpu, gfn);
 						return 0;
 					}
 					return nyx_step_over_begin(vcpu, gfn);
