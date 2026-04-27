@@ -22,7 +22,7 @@ bool nyx_hook_match(struct kvm *kvm, u64 rip, u64 *hook_id_out);
 bool nyx_hook_page_has_any(struct kvm *kvm, gfn_t gfn);
 
 /* Hook table management (called from x86.c ioctl dispatch). */
-int  nyx_hook_add(struct kvm *kvm, u64 rip, u64 hook_id);
+int  nyx_hook_add(struct kvm *kvm, u64 rip, u64 gfn, u64 hook_id);
 int  nyx_hook_remove(struct kvm *kvm, u64 rip);
 void nyx_hook_clear(struct kvm *kvm);
 

@@ -1535,6 +1535,7 @@ struct kvm_arch {
 	 * stepped over in-kernel via MTF, no userspace round-trip. */
 	struct kvm_nyx_hook_kern {
 		u64 rip;
+		u64 gfn;
 		u64 hook_id;
 	} nyx_hooks[64];
 	int        nyx_hook_count;

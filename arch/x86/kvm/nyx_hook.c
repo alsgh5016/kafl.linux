@@ -47,20 +47,21 @@ bool nyx_hook_page_has_any(struct kvm *kvm, gfn_t gfn)
 	spin_lock_irqsave(&kvm->arch.nyx_hook_lock, flags);
 	count = kvm->arch.nyx_hook_count;
 	for (i = 0; i < count; i++) {
-		if ((kvm->arch.nyx_hooks[i].rip >> PAGE_SHIFT) == gfn) {
+		if (kvm->arch.nyx_hooks[i].gfn == gfn) {
 			has = true;
 			break;
 		}
 	}
 	spin_unlock_irqrestore(&kvm->arch.nyx_hook_lock, flags);
-	printk_ratelimited(KERN_INFO
-	                   "kvm-nyx: page_has_any gfn=0x%llx count=%d -> %d\n",
-	                   (u64)gfn, count, has);
+	if (has)
+		printk_ratelimited(KERN_INFO
+		                   "kvm-nyx: page_has_any HIT gfn=0x%llx count=%d\n",
+		                   (u64)gfn, count);
 	return has;
 }
 EXPORT_SYMBOL_GPL(nyx_hook_page_has_any);
 
-int nyx_hook_add(struct kvm *kvm, u64 rip, u64 hook_id)
+int nyx_hook_add(struct kvm *kvm, u64 rip, u64 gfn, u64 hook_id)
 {
 	unsigned long flags;
 	int i, ret = 0;
@@ -69,6 +70,7 @@ int nyx_hook_add(struct kvm *kvm, u64 rip, u64 hook_id)
 	/* Replace existing entry if same RIP already registered. */
 	for (i = 0; i < kvm->arch.nyx_hook_count; i++) {
 		if (kvm->arch.nyx_hooks[i].rip == rip) {
+			kvm->arch.nyx_hooks[i].gfn = gfn;
 			kvm->arch.nyx_hooks[i].hook_id = hook_id;
 			goto out;
 		}
@@ -79,13 +81,14 @@ int nyx_hook_add(struct kvm *kvm, u64 rip, u64 hook_id)
 		goto out;
 	}
 	kvm->arch.nyx_hooks[kvm->arch.nyx_hook_count].rip = rip;
+	kvm->arch.nyx_hooks[kvm->arch.nyx_hook_count].gfn = gfn;
 	kvm->arch.nyx_hooks[kvm->arch.nyx_hook_count].hook_id = hook_id;
 	kvm->arch.nyx_hook_count++;
 out:
 	spin_unlock_irqrestore(&kvm->arch.nyx_hook_lock, flags);
 	printk(KERN_INFO
-	       "kvm-nyx: hook_add rip=0x%llx id=%llu ret=%d count=%d\n",
-	       rip, hook_id, ret, kvm->arch.nyx_hook_count);
+	       "kvm-nyx: hook_add rip=0x%llx gfn=0x%llx id=%llu ret=%d count=%d\n",
+	       rip, gfn, hook_id, ret, kvm->arch.nyx_hook_count);
 	return ret;
 }
 

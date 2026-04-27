@@ -2366,8 +2366,11 @@ struct kvm_nyx_wte_gfns {
 };
 
 struct kvm_nyx_hook_entry {
-	__u64 rip;			/* exact guest RIP to match */
+	__u64 rip;			/* exact guest RIP to match (GVA) */
 	__u64 hook_id;			/* opaque ID returned to userspace on hit */
+	__u64 gfn;			/* host PFN of the page hosting `rip` —
+					 * used to filter EPT exec violations
+					 * (GFN, not GVA, is what KVM sees) */
 	__u32 flags;			/* reserved */
 	__u32 pad;
 };

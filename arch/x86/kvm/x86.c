@@ -7659,7 +7659,7 @@ set_pit2_out:
 			r = -EFAULT;
 			break;
 		}
-		r = nyx_hook_add(kvm, entry.rip, entry.hook_id);
+		r = nyx_hook_add(kvm, entry.rip, entry.gfn, entry.hook_id);
 		break;
 	}
 	case KVM_NYX_HOOK_REMOVE: {
