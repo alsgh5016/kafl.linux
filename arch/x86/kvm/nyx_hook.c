@@ -156,6 +156,14 @@ int nyx_step_over_begin(struct kvm_vcpu *vcpu, gfn_t gfn)
 	vcpu->arch.nyx_step_active = true;
 	vcpu->arch.mtf = true;
 
+	{
+		static int dbg = 0;
+		if (dbg++ < 50 || (dbg & 0x3FF) == 0)
+			printk(KERN_INFO
+			       "kvm-nyx: step_over_begin #%d gfn=0x%llx rip=0x%lx\n",
+			       dbg, (u64)gfn, kvm_rip_read(vcpu));
+	}
+
 	return 1; /* resume guest, no userspace exit */
 }
 EXPORT_SYMBOL_GPL(nyx_step_over_begin);
@@ -177,6 +185,14 @@ int nyx_step_over_complete(struct kvm_vcpu *vcpu)
 
 	vcpu->arch.mtf = false;
 	vcpu->arch.nyx_step_active = false;
+
+	{
+		static int dbg = 0;
+		if (dbg++ < 50 || (dbg & 0x3FF) == 0)
+			printk(KERN_INFO
+			       "kvm-nyx: step_over_complete #%d gfn=0x%llx rip=0x%lx\n",
+			       dbg, (u64)gfn, kvm_rip_read(vcpu));
+	}
 
 	return 1; /* resume guest, no userspace exit */
 }
