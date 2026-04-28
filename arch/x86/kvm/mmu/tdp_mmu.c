@@ -974,16 +974,9 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
 	    !is_mmio_spte(new_spte)) {
-		/* Auto-NX: target CR3 → new user pages get X=0.
-		 * Also set nx_bitmap for SPTE eviction persistence.
-		 *
-		 * Use kvm_read_cr3() (VMCS read) instead of vcpu->arch.cr3:
-		 * the cached value is updated lazily by KVM and on the
-		 * SPTE-creation path here it is frequently stale (saw 100M+
-		 * SPTE creations with only 833 cached-cr3 hits vs target).
-		 * VMCS GUEST_CR3 is the actual current guest cr3 at the
-		 * fault — matches what handle_ept_violation already does.
-		 */
+		bool branch_a_taken = false;
+		bool branch_b_nx    = false;
+
 		u64 cur_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
 		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 		    cur_cr3 == vcpu->kvm->arch.wte_target_cr3) {
@@ -991,18 +984,36 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 			if (vcpu->kvm->arch.wte_nx_bitmap &&
 			    iter->gfn < vcpu->kvm->arch.wte_nx_bitmap_max)
 				set_bit(iter->gfn, vcpu->kvm->arch.wte_nx_bitmap);
+			branch_a_taken = true;
 		}
 
-		/* Bitmap-based WP/NX (PE pages + QEMU-side dynamic NX) */
 		{
 			gfn_t gfn = iter->gfn;
 			if (gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
 				if (vcpu->kvm->arch.wte_nx_bitmap &&
-				    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap))
+				    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap)) {
 					new_spte &= ~shadow_x_mask;
+					branch_b_nx = true;
+				}
 				if (vcpu->kvm->arch.wte_wp_bitmap &&
 				    test_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap))
 					new_spte &= ~PT_WRITABLE_MASK;
+			}
+		}
+
+		/* Minimal stats: 50K SPTE마다 1번 print, NO-NX 개별 출력 없음. */
+		{
+			static u64 spte_total = 0, spte_a = 0, spte_b = 0, spte_no = 0;
+			static u64 last_print = 0;
+			spte_total++;
+			if (branch_a_taken) spte_a++;
+			if (branch_b_nx)    spte_b++;
+			if (!branch_a_taken && !branch_b_nx) spte_no++;
+			if (spte_total - last_print >= 50000) {
+				last_print = spte_total;
+				printk(KERN_INFO
+				       "kvm-nyx-spte: total=%llu A=%llu B=%llu NO=%llu\n",
+				       spte_total, spte_a, spte_b, spte_no);
 			}
 		}
 	}
