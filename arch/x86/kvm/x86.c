@@ -7369,7 +7369,9 @@ set_pit2_out:
 		kvm->arch.wte_nx_bitmap_max = max_gfn;
 		spin_lock_init(&kvm->arch.wte_lock);
 		spin_lock_init(&kvm->arch.nyx_hook_lock);
+		spin_lock_init(&kvm->arch.nyx_dyn_range_lock);
 		kvm->arch.nyx_hook_count = 0;
+		kvm->arch.nyx_dyn_range_count = 0;
 		kvm->arch.wte_enabled = true;
 		r = 0;
 		mutex_unlock(&kvm->lock);
@@ -7679,6 +7681,46 @@ set_pit2_out:
 	}
 	case KVM_NYX_HOOK_CLEAR: {
 		nyx_hook_clear(kvm);
+		r = 0;
+		break;
+	}
+	case KVM_NYX_DYN_RANGE_ADD: {
+		struct kvm_nyx_dyn_range entry;
+		unsigned long flags;
+		int i;
+
+		if (copy_from_user(&entry, argp, sizeof(entry))) {
+			r = -EFAULT;
+			break;
+		}
+		spin_lock_irqsave(&kvm->arch.nyx_dyn_range_lock, flags);
+		/* Replace if same base already registered (idempotent). */
+		r = 0;
+		for (i = 0; i < kvm->arch.nyx_dyn_range_count; i++) {
+			if (kvm->arch.nyx_dyn_ranges[i].base == entry.base) {
+				kvm->arch.nyx_dyn_ranges[i].end = entry.end;
+				goto dyn_add_out;
+			}
+		}
+		if (kvm->arch.nyx_dyn_range_count >=
+		    (int)ARRAY_SIZE(kvm->arch.nyx_dyn_ranges)) {
+			r = -ENOSPC;
+			goto dyn_add_out;
+		}
+		kvm->arch.nyx_dyn_ranges[kvm->arch.nyx_dyn_range_count].base
+			= entry.base;
+		kvm->arch.nyx_dyn_ranges[kvm->arch.nyx_dyn_range_count].end
+			= entry.end;
+		kvm->arch.nyx_dyn_range_count++;
+dyn_add_out:
+		spin_unlock_irqrestore(&kvm->arch.nyx_dyn_range_lock, flags);
+		break;
+	}
+	case KVM_NYX_DYN_RANGE_CLEAR: {
+		unsigned long flags;
+		spin_lock_irqsave(&kvm->arch.nyx_dyn_range_lock, flags);
+		kvm->arch.nyx_dyn_range_count = 0;
+		spin_unlock_irqrestore(&kvm->arch.nyx_dyn_range_lock, flags);
 		r = 0;
 		break;
 	}

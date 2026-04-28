@@ -2359,6 +2359,13 @@ struct kvm_s390_zpci_op {
 #define KVM_NYX_HOOK_REMOVE					_IOW(KVMIO,	0xfa, struct kvm_nyx_hook_entry)
 #define KVM_NYX_HOOK_CLEAR					_IO (KVMIO,	0xfb)
 
+/* Nyx dynamic alloc-range tracking — VA-based; KVM checks fault GVA
+ * against this list inside handle_ept_violation and pre-sets the
+ * NX bitmap so the tdp_mmu auto-NX path applies NX to the SPTE on
+ * creation.  Eliminates the polling race for OEP precision. */
+#define KVM_NYX_DYN_RANGE_ADD				_IOW(KVMIO,	0xfc, struct kvm_nyx_dyn_range)
+#define KVM_NYX_DYN_RANGE_CLEAR				_IO (KVMIO,	0xfd)
+
 struct kvm_nyx_wte_gfns {
 	__u32 count;
 	__u32 flags;			/* reserved */
@@ -2373,6 +2380,11 @@ struct kvm_nyx_hook_entry {
 					 * (GFN, not GVA, is what KVM sees) */
 	__u32 flags;			/* reserved */
 	__u32 pad;
+};
+
+struct kvm_nyx_dyn_range {
+	__u64 base;			/* guest VA, page-aligned */
+	__u64 end;			/* guest VA, page-aligned (exclusive) */
 };
 
 

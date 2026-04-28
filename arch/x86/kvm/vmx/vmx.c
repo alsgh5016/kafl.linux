@@ -5909,8 +5909,44 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 		 * QEMU clears the bitmap, and the SPTE gets created with
 		 * default R+W+X permissions — bypassing all protections.
 		 */
-		if (!(error_code & PFERR_PRESENT_MASK))
+		if (!(error_code & PFERR_PRESENT_MASK)) {
+			/*
+			 * Pre-NX for dyn_range hits: this is the lazy-COMMIT
+			 * fault path.  If guest VA is valid and falls within a
+			 * registered nyx_dyn_range, set the GFN's NX bit BEFORE
+			 * kvm_mmu_page_fault creates the SPTE.  The bitmap-test
+			 * branch in tdp_mmu_map_handle_target_level then NX's
+			 * the new SPTE — first fetch on the page traps at the
+			 * exact instruction (deterministic OEP catch).
+			 */
+			if (vcpu->kvm->arch.nyx_dyn_range_count > 0 &&
+			    (exit_qualification & EPT_VIOLATION_GVA_IS_VALID)) {
+				unsigned long gva = vmcs_readl(GUEST_LINEAR_ADDRESS);
+				int i;
+				bool hit = false;
+				spin_lock_irqsave(&vcpu->kvm->arch.nyx_dyn_range_lock,
+				                  flags);
+				for (i = 0; i < vcpu->kvm->arch.nyx_dyn_range_count; i++) {
+					if (gva >= vcpu->kvm->arch.nyx_dyn_ranges[i].base &&
+					    gva <  vcpu->kvm->arch.nyx_dyn_ranges[i].end) {
+						hit = true;
+						break;
+					}
+				}
+				spin_unlock_irqrestore(&vcpu->kvm->arch.nyx_dyn_range_lock,
+				                      flags);
+				if (hit) {
+					spin_lock_irqsave(&vcpu->kvm->arch.wte_lock, flags);
+					if (vcpu->kvm->arch.wte_nx_bitmap &&
+					    gfn < vcpu->kvm->arch.wte_nx_bitmap_max)
+						set_bit(gfn,
+						        vcpu->kvm->arch.wte_nx_bitmap);
+					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock,
+					                      flags);
+				}
+			}
 			goto wte_skip;
+		}
 
 		/* WtE: intercept write violations on WP-tracked pages */
 		if ((error_code & PFERR_WRITE_MASK) &&

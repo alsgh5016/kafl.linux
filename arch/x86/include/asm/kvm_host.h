@@ -1540,6 +1540,17 @@ struct kvm_arch {
 	} nyx_hooks[64];
 	int        nyx_hook_count;
 	spinlock_t nyx_hook_lock;
+
+	/* Dynamic alloc-range tracking — VA-based.  EPT violation handler
+	 * checks fault GVA against this list and pre-sets nx_bitmap so
+	 * the tdp_mmu auto-NX path NX's the SPTE on creation.  Solves
+	 * the OEP-precision race that polling-based recheck couldn't. */
+	struct {
+		u64 base;
+		u64 end;
+	} nyx_dyn_ranges[64];
+	int        nyx_dyn_range_count;
+	spinlock_t nyx_dyn_range_lock;
 #endif
 };
 
