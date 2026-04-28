@@ -238,6 +238,40 @@ out:
 		  "spte = 0x%llx, level = %d, rsvd bits = 0x%llx", spte, level,
 		  get_rsvd_bits(&vcpu->arch.mmu->shadow_zero_check, spte, level));
 
+#ifdef CONFIG_KVM_NYX
+	/* WtE auto-NX at the universal SPTE-creation entry point.
+	 *
+	 * make_spte is called by tdp_mmu_map_handle_target_level AND by
+	 * other paths (async PF resume, prefault ioctl, page-table link,
+	 * etc.).  Hooking only tdp_mmu_map_handle_target_level missed
+	 * SPTEs created via the alternate paths — observed in amber
+	 * accesschk where the OEP page (0x7fd8c000) was mapped in the
+	 * dump but no fetch violation fired (auto-NX never applied).
+	 *
+	 * Apply both branches here:
+	 *   1. cr3 match → unconditional NX on every new user SPTE
+	 *   2. bitmap test → NX/WP from QEMU-registered ranges
+	 */
+	if (vcpu->kvm->arch.wte_enabled && slot && !is_mmio_spte(spte)) {
+		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
+		    vcpu->arch.nyx_fault_cr3 ==
+		        vcpu->kvm->arch.wte_target_cr3) {
+			spte &= ~shadow_x_mask;
+			if (vcpu->kvm->arch.wte_nx_bitmap &&
+			    gfn < vcpu->kvm->arch.wte_nx_bitmap_max)
+				set_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap);
+		}
+		if (gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
+			if (vcpu->kvm->arch.wte_nx_bitmap &&
+			    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap))
+				spte &= ~shadow_x_mask;
+			if (vcpu->kvm->arch.wte_wp_bitmap &&
+			    test_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap))
+				spte &= ~PT_WRITABLE_MASK;
+		}
+	}
+#endif
+
 	if ((spte & PT_WRITABLE_MASK) && kvm_slot_dirty_track_enabled(slot)) {
 		/* Enforced by kvm_mmu_hugepage_adjust. */
 		WARN_ON_ONCE(level > PG_LEVEL_4K);
