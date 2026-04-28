@@ -974,29 +974,77 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
 	    !is_mmio_spte(new_spte)) {
+		bool branch_a_taken = false;
+		bool branch_b_nx    = false;
+		bool branch_b_wp    = false;
+		u64 vcpu_cr3 = vcpu->arch.cr3 & ~0xFFFULL;
+		u64 tgt_cr3  = vcpu->kvm->arch.wte_target_cr3;
+
 		/* Auto-NX: target CR3 → new user pages get X=0.
 		 * Also set nx_bitmap for SPTE eviction persistence. */
-		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
-		    vcpu->arch.cr3 == vcpu->kvm->arch.wte_target_cr3) {
+		if (tgt_cr3 != 0 && vcpu_cr3 == tgt_cr3) {
 			new_spte &= ~shadow_x_mask;
 			if (vcpu->kvm->arch.wte_nx_bitmap &&
 			    iter->gfn < vcpu->kvm->arch.wte_nx_bitmap_max)
 				set_bit(iter->gfn, vcpu->kvm->arch.wte_nx_bitmap);
+			branch_a_taken = true;
 		}
 
 		/* Bitmap-based WP/NX (PE pages + QEMU-side dynamic NX) */
-		gfn_t gfn = iter->gfn;
-		if (gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
-			if (vcpu->kvm->arch.wte_nx_bitmap &&
-			    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap))
-				new_spte &= ~shadow_x_mask;
-			if (vcpu->kvm->arch.wte_wp_bitmap &&
-			    test_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap))
-				new_spte &= ~PT_WRITABLE_MASK;
+		{
+			gfn_t gfn = iter->gfn;
+			if (gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
+				if (vcpu->kvm->arch.wte_nx_bitmap &&
+				    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap)) {
+					new_spte &= ~shadow_x_mask;
+					branch_b_nx = true;
+				}
+				if (vcpu->kvm->arch.wte_wp_bitmap &&
+				    test_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap)) {
+					new_spte &= ~PT_WRITABLE_MASK;
+					branch_b_wp = true;
+				}
+			}
 		}
 
-		/* (diagnostic removed — root cause found: CR3 mismatch
-		 * on shared pages, fixed by CR3-independent auto-NX) */
+		/* TRACE: rate-limited stats so we can see whether amber
+		 * accesschk OEP page misses auto-NX (and why).  Counters
+		 * reset when KVM module reloads. */
+		{
+			static u64 spte_total = 0;
+			static u64 spte_branch_a = 0;
+			static u64 spte_branch_b_nx = 0;
+			static u64 spte_no_nx = 0;
+			static u64 spte_cr3_miss = 0;
+			static u64 last_print = 0;
+
+			spte_total++;
+			if (branch_a_taken) spte_branch_a++;
+			if (branch_b_nx)    spte_branch_b_nx++;
+			if (!branch_a_taken && !branch_b_nx) {
+				spte_no_nx++;
+				if (tgt_cr3 != 0 && vcpu_cr3 != tgt_cr3)
+					spte_cr3_miss++;
+			}
+
+			/* Print every 1000 SPTE creations + always print
+			 * SPTEs that escape both NX paths (the dangerous case). */
+			if (!branch_a_taken && !branch_b_nx &&
+			    tgt_cr3 != 0 && (spte_no_nx & 0x3F) == 1)
+				printk(KERN_INFO
+				       "kvm-nyx-spte: NO-NX gfn=0x%llx vcpu_cr3=0x%llx tgt_cr3=0x%llx (cr3_miss_total=%llu)\n",
+				       (u64)iter->gfn, vcpu_cr3, tgt_cr3,
+				       spte_cr3_miss);
+
+			if (spte_total - last_print >= 5000) {
+				last_print = spte_total;
+				printk(KERN_INFO
+				       "kvm-nyx-spte: stats total=%llu A=%llu B_nx=%llu no_nx=%llu cr3_miss=%llu\n",
+				       spte_total, spte_branch_a,
+				       spte_branch_b_nx, spte_no_nx,
+				       spte_cr3_miss);
+			}
+		}
 	}
 #endif
 
