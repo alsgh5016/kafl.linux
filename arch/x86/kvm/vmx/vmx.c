@@ -5897,6 +5897,12 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 		unsigned long flags;
 		uint64_t current_cr3;
 
+		/* Snapshot fresh GUEST_CR3 from VMCS so the SPTE-creation
+		 * path (tdp_mmu_map_handle_target_level) can read the same
+		 * value KVM saw at vmexit, instead of vcpu->arch.cr3 which
+		 * may be cached/stale on that path. */
+		vcpu->arch.nyx_fault_cr3 = vmcs_readl(GUEST_CR3) & ~0xFFFULL;
+
 		/*
 		 * WtE: Only intercept violations on PRESENT EPT entries.
 		 * If PFERR_PRESENT_MASK is clear, the EPT entry doesn't exist

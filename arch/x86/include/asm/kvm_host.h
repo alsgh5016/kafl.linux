@@ -1051,6 +1051,14 @@ struct kvm_vcpu_arch {
 	 * to userspace. */
 	bool   nyx_step_active;
 	gfn_t  nyx_step_restore_gfn;
+
+	/* Fresh GUEST_CR3 read by handle_ept_violation (via vmcs_readl).
+	 * Used by tdp_mmu_map_handle_target_level for the auto-NX cr3
+	 * comparison — vcpu->arch.cr3 / kvm_read_cr3() are sometimes
+	 * stale on the SPTE-creation path (saw 100M+ SPTE creations
+	 * with only 833 cached-cr3 hits vs target).  Updated each EPT
+	 * violation; PFN-only (low 12 bits cleared). */
+	u64    nyx_fault_cr3;
 #endif
 
 #if IS_ENABLED(CONFIG_HYPERV)
