@@ -5986,15 +5986,6 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 					u64 hook_id = 0;
 
 					if (nyx_hook_match(vcpu->kvm, rip, &hook_id)) {
-						{
-							static int dbg = 0;
-							if (dbg++ < 50 || (dbg & 0x3FF) == 0)
-								printk(KERN_INFO
-								       "kvm-nyx: MATCH #%d rip=0x%llx gfn=0x%llx hook_id=%llu nyx_step_active=%d mtf=%d\n",
-								       dbg, rip, (u64)gfn, hook_id,
-								       vcpu->arch.nyx_step_active,
-								       vcpu->arch.mtf);
-						}
 						vcpu->run->exit_reason = KVM_EXIT_KAFL_NYX_HOOK;
 						vcpu->run->kafl_nyx_hook.gfn = gfn;
 						vcpu->run->kafl_nyx_hook.gpa = gpa;
@@ -6206,14 +6197,6 @@ static int handle_pause(struct kvm_vcpu *vcpu)
 static int handle_monitor_trap(struct kvm_vcpu *vcpu)
 {
 #ifdef CONFIG_KVM_NYX
-	{
-		static int dbg = 0;
-		if (dbg++ < 50 || (dbg & 0x3FF) == 0)
-			printk(KERN_INFO
-			       "kvm-nyx: MTF #%d rip=0x%lx nyx_step_active=%d mtf=%d\n",
-			       dbg, kvm_rip_read(vcpu),
-			       vcpu->arch.nyx_step_active, vcpu->arch.mtf);
-	}
 	/* In-kernel hook step-over: re-NX the page and resume without
 	 * userspace exit.  Must be checked BEFORE the legacy mtf path
 	 * because nyx_step_active sets vcpu->arch.mtf too. */

@@ -15,7 +15,6 @@
 
 #include "nyx_hook.h"
 #include "mmu/mmu_internal.h"
-#include "kvm_cache_regs.h"
 
 #ifdef CONFIG_KVM_NYX
 
@@ -42,22 +41,17 @@ EXPORT_SYMBOL_GPL(nyx_hook_match);
 bool nyx_hook_page_has_any(struct kvm *kvm, gfn_t gfn)
 {
 	unsigned long flags;
-	int i, count;
+	int i;
 	bool has = false;
 
 	spin_lock_irqsave(&kvm->arch.nyx_hook_lock, flags);
-	count = kvm->arch.nyx_hook_count;
-	for (i = 0; i < count; i++) {
+	for (i = 0; i < kvm->arch.nyx_hook_count; i++) {
 		if (kvm->arch.nyx_hooks[i].gfn == gfn) {
 			has = true;
 			break;
 		}
 	}
 	spin_unlock_irqrestore(&kvm->arch.nyx_hook_lock, flags);
-	if (has)
-		printk_ratelimited(KERN_INFO
-		                   "kvm-nyx: page_has_any HIT gfn=0x%llx count=%d\n",
-		                   (u64)gfn, count);
 	return has;
 }
 EXPORT_SYMBOL_GPL(nyx_hook_page_has_any);
@@ -87,9 +81,6 @@ int nyx_hook_add(struct kvm *kvm, u64 rip, u64 gfn, u64 hook_id)
 	kvm->arch.nyx_hook_count++;
 out:
 	spin_unlock_irqrestore(&kvm->arch.nyx_hook_lock, flags);
-	printk(KERN_INFO
-	       "kvm-nyx: hook_add rip=0x%llx gfn=0x%llx id=%llu ret=%d count=%d\n",
-	       rip, gfn, hook_id, ret, kvm->arch.nyx_hook_count);
 	return ret;
 }
 
@@ -168,14 +159,6 @@ int nyx_step_over_begin(struct kvm_vcpu *vcpu, gfn_t gfn)
 	vcpu->arch.nyx_step_active = true;
 	vcpu->arch.mtf = true;
 
-	{
-		static int dbg = 0;
-		if (dbg++ < 50 || (dbg & 0x3FF) == 0)
-			printk(KERN_INFO
-			       "kvm-nyx: step_over_begin #%d gfn=0x%llx rip=0x%lx\n",
-			       dbg, (u64)gfn, kvm_rip_read(vcpu));
-	}
-
 	return 1; /* resume guest, no userspace exit */
 }
 EXPORT_SYMBOL_GPL(nyx_step_over_begin);
@@ -206,14 +189,6 @@ int nyx_step_over_complete(struct kvm_vcpu *vcpu)
 
 	vcpu->arch.mtf = false;
 	vcpu->arch.nyx_step_active = false;
-
-	{
-		static int dbg = 0;
-		if (dbg++ < 50 || (dbg & 0x3FF) == 0)
-			printk(KERN_INFO
-			       "kvm-nyx: step_over_complete #%d gfn=0x%llx rip=0x%lx\n",
-			       dbg, (u64)gfn, kvm_rip_read(vcpu));
-	}
 
 	return 1; /* resume guest, no userspace exit */
 }
