@@ -13237,6 +13237,27 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 	kvm_page_track_cleanup(kvm);
 	kvm_xen_destroy_vm(kvm);
 	kvm_hv_destroy_vm(kvm);
+
+	/*
+	 * Defensive WtE/Nyx-hook cleanup: KVM_NYX_WTE_DISABLE frees these on
+	 * the normal QEMU teardown path, but when QEMU dies abnormally (e.g.
+	 * Broken Pipe at Nyx handshake) the ioctl never runs and the bitmaps
+	 * leak.  Over many failed VMs the leaked memory and stale per-VM
+	 * state degrade KVM module health, surfacing as the next VM aborting
+	 * right after 'Booting VM to start fuzzing...'.
+	 */
+	if (kvm->arch.wte_nx_bitmap) {
+		bitmap_free(kvm->arch.wte_nx_bitmap);
+		kvm->arch.wte_nx_bitmap = NULL;
+	}
+	if (kvm->arch.wte_wp_bitmap) {
+		bitmap_free(kvm->arch.wte_wp_bitmap);
+		kvm->arch.wte_wp_bitmap = NULL;
+	}
+	kvm->arch.wte_nx_bitmap_max = 0;
+	kvm->arch.wte_enabled = false;
+	kvm->arch.nyx_hook_count = 0;
+	kvm->arch.nyx_dyn_range_count = 0;
 }
 
 static void memslot_rmap_free(struct kvm_memory_slot *slot)
