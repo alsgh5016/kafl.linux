@@ -6004,14 +6004,31 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 				if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 				    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
 					/*
-					 * Non-target process hit an NX-protected page.
-					 * Same reasoning as the WP case above: preserve
-					 * the bitmap bit so TDP walker re-applies NX when
-					 * the SPTE is recreated. Clearing here would let
-					 * the target process execute the page unchecked.
+					 * Non-target process (harness, OS) hit an NX page.
+					 *
+					 * For 64-bit targets, harness and target share DLL
+					 * GFNs (ntdll, kernel32, etc.).  Falling through to
+					 * kvm_mmu_page_fault here would re-apply NX via the
+					 * TDP bitmap check, causing an infinite EPT fault
+					 * loop that permanently stalls the harness.
+					 *
+					 * Instead: for hook pages, use MTF step-over so the
+					 * NX protection is restored after one instruction
+					 * (preserving target hook coverage); for plain DLL
+					 * pages, exit to QEMU so wte_handle_exec_violation
+					 * can do a quiet wte_kvm_clear_nx (the page was not
+					 * written by the packer, so no WtE event is missed).
 					 */
 					spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
-					return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
+					if (nyx_hook_page_has_any(vcpu->kvm, gfn))
+						return nyx_step_over_begin(vcpu, gfn);
+					vcpu->run->exit_reason = KVM_EXIT_KAFL_WTE;
+					vcpu->run->kafl_wte.gfn = gfn;
+					vcpu->run->kafl_wte.gpa = gpa;
+					vcpu->run->kafl_wte.rip = kvm_rip_read(vcpu);
+					vcpu->run->kafl_wte.cr3 = current_cr3;
+					vcpu->run->kafl_wte.type = 0; /* execute violation */
+					return 0;
 				}
 				spin_unlock_irqrestore(&vcpu->kvm->arch.wte_lock, flags);
 
