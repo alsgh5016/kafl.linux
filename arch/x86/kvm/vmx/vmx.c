@@ -5961,7 +5961,7 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 			if (vcpu->kvm->arch.wte_wp_bitmap &&
 			    gfn < vcpu->kvm->arch.wte_nx_bitmap_max &&
 			    test_bit(gfn, vcpu->kvm->arch.wte_wp_bitmap)) {
-				current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
+				current_cr3 = vcpu->arch.nyx_fault_cr3;
 				if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 				    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
 					/*
@@ -6000,7 +6000,7 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 			if (vcpu->kvm->arch.wte_nx_bitmap &&
 			    gfn < vcpu->kvm->arch.wte_nx_bitmap_max &&
 			    test_bit(gfn, vcpu->kvm->arch.wte_nx_bitmap)) {
-				current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
+				current_cr3 = vcpu->arch.nyx_fault_cr3;
 				if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 				    current_cr3 != vcpu->kvm->arch.wte_target_cr3) {
 					/*
@@ -6069,7 +6069,7 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 			 * but NX'd by tdp_mmu auto-NX (target CR3 match).
 			 * Set nx_bitmap and exit to QEMU for WtE/DLL handling.
 			 */
-			current_cr3 = kvm_read_cr3(vcpu) & ~0xFFFULL;
+			current_cr3 = vcpu->arch.nyx_fault_cr3;
 			if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 			    current_cr3 == vcpu->kvm->arch.wte_target_cr3 &&
 			    gfn < vcpu->kvm->arch.wte_nx_bitmap_max) {
