@@ -1545,7 +1545,7 @@ struct kvm_arch {
 		u64 rip;
 		u64 gfn;
 		u64 hook_id;
-	} nyx_hooks[64];
+	} nyx_hooks[256];
 	int        nyx_hook_count;
 	spinlock_t nyx_hook_lock;
 
