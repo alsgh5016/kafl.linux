@@ -95,6 +95,14 @@
 #define CREATE_TRACE_POINTS
 #include "trace.h"
 
+#ifdef CONFIG_KVM_NYX
+static void kvm_nyx_wte_split_gfn(struct kvm *kvm,
+				  struct kvm_memory_slot *slot, gfn_t gfn)
+{
+	kvm_mmu_try_split_huge_pages(kvm, slot, gfn, gfn + 1, PG_LEVEL_4K);
+}
+#endif
+
 #define MAX_IO_MSRS 256
 #define KVM_MAX_MCE_BANKS 32
 
@@ -7442,14 +7450,16 @@ set_pit2_out:
 		}
 
 		write_lock(&kvm->mmu_lock);
-		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
 		for (i = 0; i < header.count; i++) {
 			gfn_t gfn = gfn_array[i];
 			struct kvm_memory_slot *slot;
 
+			spin_lock_irqsave(&kvm->arch.wte_lock, flags);
 			if (!kvm->arch.wte_enabled ||
-			    gfn >= kvm->arch.wte_nx_bitmap_max)
+			    gfn >= kvm->arch.wte_nx_bitmap_max) {
+				spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 				continue;
+			}
 
 			/* Always set bit (idempotent) AND always try the SPTE
 			 * update.  Previous code skipped SPTE when bitmap was
@@ -7458,12 +7468,14 @@ set_pit2_out:
 			 * required so freshly-faulted SPTEs get NX promptly,
 			 * which the API hook return-path depends on. */
 			set_bit(gfn, kvm->arch.wte_nx_bitmap);
+			spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 
 			slot = gfn_to_memslot(kvm, gfn);
-			if (slot)
+			if (slot) {
+				kvm_nyx_wte_split_gfn(kvm, slot, gfn);
 				flush |= kvm_mmu_slot_gfn_set_nx(kvm, slot, gfn);
+			}
 		}
-		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 
 		/* Also walk ALL existing SPTEs and apply NX from bitmap.
 		 * set_nx_gfn may miss SPTEs that were created before the
@@ -7507,23 +7519,29 @@ set_pit2_out:
 		}
 
 		write_lock(&kvm->mmu_lock);
-		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
 		for (i = 0; i < header.count; i++) {
 			gfn_t gfn = gfn_array[i];
 			struct kvm_memory_slot *slot;
 
+			spin_lock_irqsave(&kvm->arch.wte_lock, flags);
 			if (!kvm->arch.wte_enabled ||
-			    gfn >= kvm->arch.wte_nx_bitmap_max)
+			    gfn >= kvm->arch.wte_nx_bitmap_max) {
+				spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 				continue;
+			}
 
-			if (!test_and_clear_bit(gfn, kvm->arch.wte_nx_bitmap))
+			if (!test_and_clear_bit(gfn, kvm->arch.wte_nx_bitmap)) {
+				spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 				continue; /* not NX */
+			}
+			spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 
 			slot = gfn_to_memslot(kvm, gfn);
-			if (slot)
+			if (slot) {
+				kvm_nyx_wte_split_gfn(kvm, slot, gfn);
 				flush |= kvm_mmu_slot_gfn_clear_nx(kvm, slot, gfn);
+			}
 		}
-		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 		if (flush)
 			kvm_flush_remote_tlbs(kvm);
 		write_unlock(&kvm->mmu_lock);
@@ -7580,23 +7598,29 @@ set_pit2_out:
 		}
 
 		write_lock(&kvm->mmu_lock);
-		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
 		for (i = 0; i < header.count; i++) {
 			gfn_t gfn = gfn_array[i];
 			struct kvm_memory_slot *slot;
 
+			spin_lock_irqsave(&kvm->arch.wte_lock, flags);
 			if (!kvm->arch.wte_enabled ||
-			    gfn >= kvm->arch.wte_nx_bitmap_max)
+			    gfn >= kvm->arch.wte_nx_bitmap_max) {
+				spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 				continue;
+			}
 
-			if (test_and_set_bit(gfn, kvm->arch.wte_wp_bitmap))
+			if (test_and_set_bit(gfn, kvm->arch.wte_wp_bitmap)) {
+				spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 				continue;
+			}
+			spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 
 			slot = gfn_to_memslot(kvm, gfn);
-			if (slot)
+			if (slot) {
+				kvm_nyx_wte_split_gfn(kvm, slot, gfn);
 				flush |= kvm_mmu_slot_gfn_set_wp(kvm, slot, gfn);
+			}
 		}
-		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 		if (flush)
 			kvm_flush_remote_tlbs(kvm);
 		write_unlock(&kvm->mmu_lock);
@@ -7634,23 +7658,29 @@ set_pit2_out:
 		}
 
 		write_lock(&kvm->mmu_lock);
-		spin_lock_irqsave(&kvm->arch.wte_lock, flags);
 		for (i = 0; i < header.count; i++) {
 			gfn_t gfn = gfn_array[i];
 			struct kvm_memory_slot *slot;
 
+			spin_lock_irqsave(&kvm->arch.wte_lock, flags);
 			if (!kvm->arch.wte_enabled ||
-			    gfn >= kvm->arch.wte_nx_bitmap_max)
+			    gfn >= kvm->arch.wte_nx_bitmap_max) {
+				spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 				continue;
+			}
 
-			if (!test_and_clear_bit(gfn, kvm->arch.wte_wp_bitmap))
+			if (!test_and_clear_bit(gfn, kvm->arch.wte_wp_bitmap)) {
+				spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 				continue;
+			}
+			spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 
 			slot = gfn_to_memslot(kvm, gfn);
-			if (slot)
+			if (slot) {
+				kvm_nyx_wte_split_gfn(kvm, slot, gfn);
 				flush |= kvm_mmu_slot_gfn_clear_wp(kvm, slot, gfn);
+			}
 		}
-		spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
 		if (flush)
 			kvm_flush_remote_tlbs(kvm);
 		write_unlock(&kvm->mmu_lock);
