@@ -252,7 +252,8 @@ out:
 	 *   1. cr3 match → unconditional NX on every new user SPTE
 	 *   2. bitmap test → NX/WP from QEMU-registered ranges
 	 */
-	if (vcpu->kvm->arch.wte_enabled && slot && !is_mmio_spte(spte)) {
+	if (vcpu->kvm->arch.wte_enabled && slot && level == PG_LEVEL_4K &&
+	    !is_mmio_spte(spte)) {
 		if (vcpu->kvm->arch.wte_target_cr3 != 0 &&
 		    vcpu->arch.nyx_fault_cr3 ==
 		        vcpu->kvm->arch.wte_target_cr3) {

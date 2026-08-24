@@ -973,6 +973,7 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	 *    (set explicitly by wte_protect_pe_range).
 	 */
 	if (vcpu->kvm->arch.wte_enabled && fault->slot &&
+	    fault->goal_level == PG_LEVEL_4K &&
 	    !is_mmio_spte(new_spte)) {
 		/* Auto-NX: target CR3 → new user pages get X=0.
 		 * Use vcpu->arch.nyx_fault_cr3, captured fresh from VMCS
@@ -1790,6 +1791,12 @@ bool kvm_tdp_mmu_write_protect_gfn(struct kvm *kvm,
 }
 
 #ifdef CONFIG_KVM_NYX
+static bool wte_4k_leaf_spte(u64 spte, int level)
+{
+	return level == PG_LEVEL_4K && is_shadow_present_pte(spte) &&
+	       is_last_spte(spte, level);
+}
+
 /*
  * Clears the execute permission on the last level SPTE mapping this GFN.
  * Used for WtE (Written-then-Executed) detection via EPT NX.
@@ -1805,8 +1812,7 @@ static bool set_nx_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
 	rcu_read_lock();
 
 	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
-		if (!is_shadow_present_pte(iter.old_spte) ||
-		    !is_last_spte(iter.old_spte, iter.level))
+		if (!wte_4k_leaf_spte(iter.old_spte, iter.level))
 			continue;
 
 		/* Clear execute bit (bit 2 in EPT) */
@@ -1860,6 +1866,8 @@ int kvm_tdp_mmu_enforce_nx_all(struct kvm *kvm)
 			gfn_t gfn = iter.gfn;
 			u64 new_spte;
 
+			if (!wte_4k_leaf_spte(iter.old_spte, iter.level))
+				continue;
 			if (gfn >= kvm->arch.wte_nx_bitmap_max)
 				continue;
 			if (!test_bit(gfn, kvm->arch.wte_nx_bitmap))
@@ -1892,8 +1900,7 @@ static bool clear_nx_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
 	rcu_read_lock();
 
 	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
-		if (!is_shadow_present_pte(iter.old_spte) ||
-		    !is_last_spte(iter.old_spte, iter.level))
+		if (!wte_4k_leaf_spte(iter.old_spte, iter.level))
 			continue;
 
 		/* Set execute bit (bit 2 in EPT) */
@@ -1938,8 +1945,7 @@ static bool set_wp_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
 	rcu_read_lock();
 
 	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
-		if (!is_shadow_present_pte(iter.old_spte) ||
-		    !is_last_spte(iter.old_spte, iter.level))
+		if (!wte_4k_leaf_spte(iter.old_spte, iter.level))
 			continue;
 
 		/* Clear writable bit (bit 1 in EPT) */
@@ -1980,8 +1986,7 @@ static bool clear_wp_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
 	rcu_read_lock();
 
 	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
-		if (!is_shadow_present_pte(iter.old_spte) ||
-		    !is_last_spte(iter.old_spte, iter.level))
+		if (!wte_4k_leaf_spte(iter.old_spte, iter.level))
 			continue;
 
 		/* Set writable bit (bit 1 in EPT) */

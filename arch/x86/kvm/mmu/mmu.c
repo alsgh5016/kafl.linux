@@ -38,6 +38,7 @@
 #include <linux/export.h>
 #include <linux/swap.h>
 #include <linux/hugetlb.h>
+#include <linux/bitmap.h>
 #include <linux/compiler.h>
 #include <linux/srcu.h>
 #include <linux/slab.h>
@@ -3230,6 +3231,50 @@ int kvm_mmu_max_mapping_level(struct kvm *kvm,
 	return __kvm_mmu_max_mapping_level(kvm, slot, gfn, max_level, is_private);
 }
 
+#ifdef CONFIG_KVM_NYX
+static bool wte_range_has_bit(const unsigned long *bm, gfn_t start, gfn_t end)
+{
+	return bm && find_next_bit(bm, end, start) < end;
+}
+
+static bool wte_forces_4k(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault, int level)
+{
+	struct kvm *kvm = vcpu->kvm;
+	unsigned long flags;
+	gfn_t start, end;
+	bool requires_4k = false;
+
+	if (level == PG_LEVEL_4K)
+		return false;
+
+	if (!READ_ONCE(kvm->arch.wte_enabled))
+		return false;
+
+	spin_lock_irqsave(&kvm->arch.wte_lock, flags);
+	if (!kvm->arch.wte_enabled)
+		goto out;
+
+	if (kvm->arch.wte_target_cr3 &&
+	    vcpu->arch.nyx_fault_cr3 == kvm->arch.wte_target_cr3) {
+		requires_4k = true;
+		goto out;
+	}
+
+	start = gfn_round_for_level(fault->gfn, level);
+	if (start >= kvm->arch.wte_nx_bitmap_max)
+		goto out;
+
+	end = min_t(gfn_t, start + KVM_PAGES_PER_HPAGE(level),
+		    kvm->arch.wte_nx_bitmap_max);
+	requires_4k = wte_range_has_bit(kvm->arch.wte_nx_bitmap, start, end) ||
+		       wte_range_has_bit(kvm->arch.wte_wp_bitmap, start, end);
+
+out:
+	spin_unlock_irqrestore(&kvm->arch.wte_lock, flags);
+	return requires_4k;
+}
+#endif
+
 void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 {
 	struct kvm_memory_slot *slot = fault->slot;
@@ -3251,8 +3296,14 @@ void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	 * level, which will be used to do precise, accurate accounting.
 	 */
 	fault->req_level = __kvm_mmu_max_mapping_level(vcpu->kvm, slot,
-						       fault->gfn, fault->max_level,
-						       fault->is_private);
+					       fault->gfn, fault->max_level,
+					       fault->is_private);
+#ifdef CONFIG_KVM_NYX
+	if (wte_forces_4k(vcpu, fault, fault->req_level)) {
+		fault->req_level = PG_LEVEL_4K;
+		return;
+	}
+#endif
 	if (fault->req_level == PG_LEVEL_4K || fault->huge_page_disallowed)
 		return;
 
