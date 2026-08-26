@@ -5979,7 +5979,7 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	    (PFERR_FETCH_MASK | PFERR_PRESENT_MASK) &&
 	    (exit_qualification & EPT_VIOLATION_GVA_IS_VALID) &&
 	    vcpu->kvm->created_vcpus == 1 && !is_guest_mode(vcpu) &&
-	    !is_smm(vcpu) && tdp_mmu_enabled && vcpu->arch.mmu &&
+	    !is_smm(vcpu) && vcpu->arch.mmu &&
 	    vcpu->arch.mmu->root_role.direct &&
 	    vcpu->arch.mmu->root_role.nyx_strict_target &&
 	    vmx_nyx_strict_pt_runtime_enabled(vcpu)) {
