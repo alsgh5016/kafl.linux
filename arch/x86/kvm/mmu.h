@@ -321,4 +321,14 @@ static inline gpa_t kvm_translate_gpa(struct kvm_vcpu *vcpu,
 	access |= PFERR_USER_MASK;
 	return mmu->gva_to_gpa(vcpu, mmu, gpa, access, exception);
 }
+#ifdef CONFIG_KVM_NYX
+struct kvm_nyx_pt_walk_result {
+	gfn_t table_gfns[PT64_ROOT_MAX_LEVEL];
+	gfn_t data_gfn;
+	u8 table_count;
+	u8 leaf_level;
+};
+int kvm_mmu_nyx_strict_pt_walk(struct kvm_vcpu *vcpu, gpa_t target_cr3, gva_t gva,
+			       struct kvm_nyx_pt_walk_result *result);
+#endif
 #endif

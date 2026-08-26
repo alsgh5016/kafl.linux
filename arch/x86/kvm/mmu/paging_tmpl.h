@@ -301,7 +301,8 @@ static inline bool FNAME(is_last_gpte)(struct kvm_mmu *mmu,
  */
 static int FNAME(walk_addr_generic)(struct guest_walker *walker,
 				    struct kvm_vcpu *vcpu, struct kvm_mmu *mmu,
-				    gpa_t addr, u64 access)
+				    gpa_t addr, u64 access, gpa_t target_cr3,
+				    bool suppress_ad)
 {
 	int ret;
 	pt_element_t pte;
@@ -324,7 +325,8 @@ static int FNAME(walk_addr_generic)(struct guest_walker *walker,
 	trace_kvm_mmu_pagetable_walk(addr, access);
 retry_walk:
 	walker->level = mmu->cpu_role.base.level;
-	pte           = kvm_mmu_get_guest_pgd(vcpu, mmu);
+	pte = target_cr3 != INVALID_GPA ?
+		target_cr3 : kvm_mmu_get_guest_pgd(vcpu, mmu);
 	have_ad       = PT_HAVE_ACCESSED_DIRTY(mmu);
 
 #if PTTYPE == 64
@@ -462,7 +464,7 @@ retry_walk:
 		accessed_dirty &= pte >>
 			(PT_GUEST_DIRTY_SHIFT - PT_GUEST_ACCESSED_SHIFT);
 
-	if (unlikely(!accessed_dirty)) {
+	if (unlikely(!accessed_dirty) && !suppress_ad) {
 		ret = FNAME(update_accessed_dirty_bits)(vcpu, mmu, walker,
 							addr, write_fault);
 		if (unlikely(ret < 0))
@@ -526,7 +528,7 @@ static int FNAME(walk_addr)(struct guest_walker *walker,
 			    struct kvm_vcpu *vcpu, gpa_t addr, u64 access)
 {
 	return FNAME(walk_addr_generic)(walker, vcpu, vcpu->arch.mmu, addr,
-					access);
+					access, INVALID_GPA, false);
 }
 
 static bool
@@ -878,7 +880,8 @@ static gpa_t FNAME(gva_to_gpa)(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu,
 	WARN_ON_ONCE((addr >> 32) && mmu == vcpu->arch.walk_mmu);
 #endif
 
-	r = FNAME(walk_addr_generic)(&walker, vcpu, mmu, addr, access);
+	r = FNAME(walk_addr_generic)(&walker, vcpu, mmu, addr, access,
+				    INVALID_GPA, false);
 
 	if (r) {
 		gpa = gfn_to_gpa(walker.gfn);
@@ -966,6 +969,42 @@ static int FNAME(sync_spte)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp, int 
 
 	return mmu_spte_update(sptep, spte);
 }
+
+#if PTTYPE == 64
+#ifdef CONFIG_KVM_NYX
+int kvm_mmu_nyx_strict_pt_walk(struct kvm_vcpu *vcpu, gpa_t target_cr3,
+			       gva_t gva,
+			       struct kvm_nyx_pt_walk_result *result)
+{
+	struct guest_walker walker = { 0 };
+	struct kvm_mmu *mmu = vcpu->arch.mmu;
+	int level;
+	int r;
+
+	if (!result || target_cr3 == INVALID_GPA)
+		return -EINVAL;
+	if (is_guest_mode(vcpu) || is_smm(vcpu) || !mmu->root_role.direct ||
+	    (mmu->cpu_role.base.level != PT64_ROOT_4LEVEL &&
+	     mmu->cpu_role.base.level != PT64_ROOT_5LEVEL))
+		return -EOPNOTSUPP;
+
+	memset(result, 0, sizeof(*result));
+	r = FNAME(walk_addr_generic)(&walker, vcpu, mmu, gva, 0,
+				    target_cr3, true);
+	if (!r)
+		return walker.fault.error_code & PFERR_RSVD_MASK ?
+			-EINVAL : -ENOENT;
+
+	result->leaf_level = walker.level;
+	result->data_gfn = walker.gfn;
+	for (level = walker.max_level; level >= walker.level; level--)
+		result->table_gfns[result->table_count++] =
+			walker.table_gfn[level - 1];
+
+	return 0;
+}
+#endif
+#endif
 
 #undef pt_element_t
 #undef guest_walker
