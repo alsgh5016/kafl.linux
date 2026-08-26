@@ -121,6 +121,11 @@
 	KVM_ARCH_REQ_FLAGS(31, KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
 #define KVM_REQ_HV_TLB_FLUSH \
 	KVM_ARCH_REQ_FLAGS(32, KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
+#ifdef CONFIG_KVM_NYX
+#define KVM_REQ_NYX_STRICT_PT_UPDATE \
+	KVM_ARCH_REQ_FLAGS(33, KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
+#define KVM_REQ_NYX_STRICT_PT_REWALK	KVM_ARCH_REQ(34)
+#endif
 
 #define CR0_RESERVED_BITS                                               \
 	(~(unsigned long)(X86_CR0_PE | X86_CR0_MP | X86_CR0_EM | X86_CR0_TS \
@@ -292,6 +297,8 @@ enum x86_intercept_stage;
 #define KVM_APIC_PV_EOI_PENDING	1
 
 struct kvm_kernel_irq_routing_entry;
+struct nyx_strict_pt_control_context;
+struct nyx_strict_pt_runtime_tracker;
 
 /*
  * kvm_mmu_page_role tracks the properties of a shadow page (where shadow page
@@ -329,7 +336,8 @@ struct kvm_kernel_irq_routing_entry;
  *     cr0_wp=0, therefore these three bits only give rise to 5 possibilities.
  *
  * Therefore, the maximum number of possible upper-level shadow pages for a
- * single gfn is a bit less than 2^13.
+ * single gfn is a bit less than 2^13, or 2^14 when KVM_NYX consumes an
+ * additional role bit.
  */
 union kvm_mmu_page_role {
 	u32 word;
@@ -347,7 +355,12 @@ union kvm_mmu_page_role {
 		unsigned ad_disabled:1;
 		unsigned guest_mode:1;
 		unsigned passthrough:1;
+#ifdef CONFIG_KVM_NYX
+		unsigned nyx_strict_target:1;
+		unsigned :4;
+#else
 		unsigned :5;
+#endif
 
 		/*
 		 * This is left at the top of the word so that
@@ -1528,6 +1541,8 @@ struct kvm_arch {
 #ifdef CONFIG_KVM_NYX
 	void* fdl_opaque; 
 	uint64_t printk_addr;
+	struct nyx_strict_pt_control_context *nyx_strict_pt;
+	struct nyx_strict_pt_runtime_tracker *nyx_strict_pt_runtime;
 
 	/* WtE (Written-then-Executed) Dual-Watch EPT tracking */
 	bool wte_enabled;
@@ -1846,6 +1861,10 @@ struct kvm_x86_ops {
 	int (*complete_emulated_msr)(struct kvm_vcpu *vcpu, int err);
 
 	void (*vcpu_deliver_sipi_vector)(struct kvm_vcpu *vcpu, u8 vector);
+
+#ifdef CONFIG_KVM_NYX
+	void (*update_nyx_strict_pt)(struct kvm_vcpu *vcpu);
+#endif
 
 	/*
 	 * Returns vCPU specific APICv inhibit reasons

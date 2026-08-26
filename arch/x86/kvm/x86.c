@@ -90,6 +90,8 @@
 #include "vmx/vmx_pt.h"
 #include "mmu/mmu_internal.h"
 #include "nyx_hook.h"
+#include "nyx_strict_pt_control.h"
+#include "nyx_strict_pt_runtime.h"
 #endif
 
 #define CREATE_TRACE_POINTS
@@ -7329,6 +7331,79 @@ set_pit2_out:
 		break;
 	}
 #ifdef CONFIG_KVM_NYX
+	case KVM_NYX_STRICT_PT_CONTROL: {
+		struct kvm_nyx_strict_pt_control control;
+		struct nyx_strict_pt_control_context *strict_pt;
+
+		r = -EFAULT;
+		if (copy_from_user(&control, argp, sizeof(control)))
+			break;
+
+		mutex_lock(&kvm->lock);
+		strict_pt = kvm->arch.nyx_strict_pt;
+		if (WARN_ON_ONCE(!kvm->arch.nyx_strict_pt_runtime)) {
+			r = -EIO;
+			goto out_nyx_strict_pt_unlock;
+		}
+		nyx_strict_pt_runtime_operation_lock(kvm);
+		r = nyx_strict_pt_runtime_consume_invalidation(kvm);
+		if (r)
+			goto out_nyx_strict_pt_operation_unlock;
+		if (control.command == KVM_NYX_STRICT_PT_GET_STATUS)
+			nyx_strict_pt_runtime_refresh_status(kvm);
+		r = nyx_strict_pt_control_execute(strict_pt,
+						 &control,
+						 kvm->created_vcpus,
+						 0);
+		if (!r) {
+			switch (control.command) {
+			case KVM_NYX_STRICT_PT_ENABLE:
+				r = nyx_strict_pt_runtime_handle_enable(kvm, &control);
+				break;
+			case KVM_NYX_STRICT_PT_DISABLE:
+				r = nyx_strict_pt_runtime_handle_disable(kvm);
+				break;
+			case KVM_NYX_STRICT_PT_RESET:
+				r = nyx_strict_pt_runtime_handle_reset(kvm, &control);
+				break;
+			default:
+				break;
+			}
+		} else if (r == -EOPNOTSUPP) {
+			switch (control.command) {
+			case KVM_NYX_STRICT_PT_RANGE_ADD:
+				r = nyx_strict_pt_runtime_handle_range_add(kvm, &control);
+				break;
+			case KVM_NYX_STRICT_PT_RANGE_REMOVE:
+				r = nyx_strict_pt_runtime_handle_range_remove(kvm, &control);
+				break;
+			case KVM_NYX_STRICT_PT_ACK:
+				r = nyx_strict_pt_runtime_handle_ack(kvm, &control);
+				break;
+			default:
+				break;
+			}
+		}
+	out_nyx_strict_pt_operation_unlock:
+		nyx_strict_pt_runtime_operation_unlock(kvm);
+	out_nyx_strict_pt_unlock:
+		mutex_unlock(&kvm->lock);
+		if (r)
+			break;
+
+		r = -EFAULT;
+		if (copy_to_user(argp, &control, sizeof(control))) {
+			mutex_lock(&kvm->lock);
+			nyx_strict_pt_runtime_operation_lock(kvm);
+			nyx_strict_pt_runtime_handle_copyout_fault(kvm, &control);
+			nyx_strict_pt_runtime_operation_unlock(kvm);
+			mutex_unlock(&kvm->lock);
+			break;
+		}
+
+		r = 0;
+		break;
+	}
 	case KVM_VMX_FDL_SETUP_FD: 
 		r = -EPERM;
 		break;
@@ -11247,6 +11322,18 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 	bool req_immediate_exit = false;
 
+#ifdef CONFIG_KVM_NYX
+	if (!kvm_request_pending(vcpu)) {
+		r = nyx_strict_pt_runtime_replay_pending(vcpu);
+		if (unlikely(r < 0))
+			goto out;
+		if (r > 0) {
+			r = 0;
+			goto out;
+		}
+	}
+#endif
+
 	if (kvm_request_pending(vcpu)) {
 		if (kvm_check_request(KVM_REQ_VM_DEAD, vcpu)) {
 			r = -EIO;
@@ -11264,6 +11351,28 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 				goto out;
 			}
 		}
+#ifdef CONFIG_KVM_NYX
+		if (kvm_check_request(KVM_REQ_NYX_STRICT_PT_UPDATE, vcpu)) {
+			nyx_strict_pt_runtime_wait_for_update(vcpu->kvm);
+			static_call_cond(kvm_x86_update_nyx_strict_pt)(vcpu);
+			kvm_mmu_reset_context(vcpu);
+		}
+		if (kvm_check_request(KVM_REQ_NYX_STRICT_PT_REWALK, vcpu)) {
+			r = nyx_strict_pt_runtime_handle_rewalk(vcpu);
+			if (unlikely(r)) {
+				static_call_cond(kvm_x86_update_nyx_strict_pt)(vcpu);
+				kvm_mmu_reset_context(vcpu);
+				goto out;
+			}
+		}
+		r = nyx_strict_pt_runtime_replay_pending(vcpu);
+		if (unlikely(r < 0))
+			goto out;
+		if (r > 0) {
+			r = 0;
+			goto out;
+		}
+#endif
 		if (kvm_check_request(KVM_REQ_MMU_FREE_OBSOLETE_ROOTS, vcpu))
 			kvm_mmu_free_obsolete_roots(vcpu);
 		if (kvm_check_request(KVM_REQ_MIGRATE_TIMER, vcpu))
@@ -12589,6 +12698,12 @@ int kvm_arch_vcpu_precreate(struct kvm *kvm, unsigned int id)
 	if (id >= kvm->arch.max_vcpu_ids)
 		return -EINVAL;
 
+#ifdef CONFIG_KVM_NYX
+	if (!nyx_strict_pt_policy_vcpu_create_allowed(
+			&kvm->arch.nyx_strict_pt->policy))
+		return -EBUSY;
+#endif
+
 	return static_call(kvm_x86_vcpu_precreate)(kvm);
 }
 
@@ -13078,9 +13193,26 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 
 	kvm_mmu_init_vm(kvm);
 
+#ifdef CONFIG_KVM_NYX
+	kvm->arch.nyx_strict_pt = kzalloc(sizeof(*kvm->arch.nyx_strict_pt),
+					 GFP_KERNEL_ACCOUNT);
+	if (!kvm->arch.nyx_strict_pt) {
+		ret = -ENOMEM;
+		goto out_uninit_mmu;
+	}
+
+	ret = nyx_strict_pt_runtime_create(kvm, kvm->arch.nyx_strict_pt);
+	if (ret)
+		goto out_free_nyx_strict_pt;
+#endif
+
 	ret = static_call(kvm_x86_vm_init)(kvm);
 	if (ret)
+#ifdef CONFIG_KVM_NYX
+		goto out_destroy_nyx_strict_pt_runtime;
+#else
 		goto out_uninit_mmu;
+#endif
 
 	INIT_HLIST_HEAD(&kvm->arch.mask_notifier_list);
 	atomic_set(&kvm->arch.noncoherent_dma_count, 0);
@@ -13121,7 +13253,13 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 #endif
 
 	return 0;
-
+#ifdef CONFIG_KVM_NYX
+out_destroy_nyx_strict_pt_runtime:
+	nyx_strict_pt_runtime_destroy(kvm);
+out_free_nyx_strict_pt:
+	kfree(kvm->arch.nyx_strict_pt);
+	kvm->arch.nyx_strict_pt = NULL;
+#endif
 out_uninit_mmu:
 	kvm_mmu_uninit_vm(kvm);
 	kvm_page_track_cleanup(kvm);
@@ -13263,6 +13401,13 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 	kvm_destroy_vcpus(kvm);
 	kvfree(rcu_dereference_check(kvm->arch.apic_map, 1));
 	kfree(srcu_dereference_check(kvm->arch.pmu_event_filter, &kvm->srcu, 1));
+
+#ifdef CONFIG_KVM_NYX
+	nyx_strict_pt_runtime_destroy(kvm);
+	kfree(kvm->arch.nyx_strict_pt);
+	kvm->arch.nyx_strict_pt = NULL;
+#endif
+
 	kvm_mmu_uninit_vm(kvm);
 	kvm_page_track_cleanup(kvm);
 	kvm_xen_destroy_vm(kvm);
