@@ -258,6 +258,9 @@ struct vcpu_vmx {
 	uint8_t				cr3_target_control_count;
 	uint8_t				cr3_target_control_slot;
 	uint64_t			cr3_target_control[4];
+	bool				nyx_strict_pt_overlay_active;
+	u32				nyx_strict_pt_saved_cr3_load_exiting;
+	u32				nyx_strict_pt_saved_cr3_target_count;
 #endif
 
 	/*

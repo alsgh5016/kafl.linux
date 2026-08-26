@@ -66,6 +66,9 @@
 #include "vmx.h"
 #ifdef CONFIG_KVM_NYX
 #include "../nyx_hook.h"
+#include "nyx_strict_pt_control.h"
+#include "nyx_strict_pt_policy.h"
+#include "nyx_strict_pt_runtime.h"
 #endif
 #include "x86.h"
 #include "smm.h"
@@ -2538,6 +2541,71 @@ static void vmx_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
 	}
 }
 
+#ifdef CONFIG_KVM_NYX
+static bool vmx_nyx_strict_pt_runtime_enabled(struct kvm_vcpu *vcpu)
+{
+	struct nyx_strict_pt_control_context *context = vcpu->kvm->arch.nyx_strict_pt;
+
+	if (!context)
+		return false;
+
+	return smp_load_acquire(&context->runtime_root.enabled);
+}
+
+static void vmx_nyx_strict_pt_restore_overlay(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	u32 exec_control;
+
+	if (!vmx->nyx_strict_pt_overlay_active)
+		return;
+
+	exec_control = exec_controls_get(vmx);
+	exec_control &= ~CPU_BASED_CR3_LOAD_EXITING;
+	exec_control |= vmx->nyx_strict_pt_saved_cr3_load_exiting;
+	exec_controls_set(vmx, exec_control);
+	vmcs_write32(CR3_TARGET_COUNT, vmx->nyx_strict_pt_saved_cr3_target_count);
+	vmx->nyx_strict_pt_overlay_active = false;
+}
+
+static void vmx_nyx_strict_pt_apply_overlay(struct kvm_vcpu *vcpu,
+					    bool cache_guest_cr3)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	u32 exec_control;
+
+	if (!vmx_nyx_strict_pt_runtime_enabled(vcpu)) {
+		vmx_nyx_strict_pt_restore_overlay(vcpu);
+		return;
+	}
+
+	if (vmx->nyx_strict_pt_overlay_active)
+		return;
+
+	exec_control = exec_controls_get(vmx);
+	vmx->nyx_strict_pt_saved_cr3_load_exiting =
+		exec_control & CPU_BASED_CR3_LOAD_EXITING;
+	vmx->nyx_strict_pt_saved_cr3_target_count = vmcs_read32(CR3_TARGET_COUNT);
+
+	if (cache_guest_cr3 && !vmx->nyx_strict_pt_saved_cr3_load_exiting)
+		vmx_cache_reg(vcpu, VCPU_EXREG_CR3);
+
+	vmcs_write32(CR3_TARGET_COUNT, 0);
+	exec_controls_setbit(vmx, CPU_BASED_CR3_LOAD_EXITING);
+	vmx->nyx_strict_pt_overlay_active = true;
+}
+
+static void vmx_update_nyx_strict_pt(struct kvm_vcpu *vcpu)
+{
+	vmx_nyx_strict_pt_apply_overlay(vcpu, true);
+}
+#else
+static inline bool vmx_nyx_strict_pt_runtime_enabled(struct kvm_vcpu *vcpu)
+{
+	return false;
+}
+#endif
+
 /*
  * There is no X86_FEATURE for SGX yet, but anyway we need to query CPUID
  * directly instead of going through cpu_has(), to ensure KVM is trapping
@@ -3309,6 +3377,10 @@ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
 	unsigned long hw_cr0, old_cr0_pg;
 	u32 tmp;
 
+#ifdef CONFIG_KVM_NYX
+	vmx_nyx_strict_pt_restore_overlay(vcpu);
+#endif
+
 	old_cr0_pg = kvm_read_cr0_bits(vcpu, X86_CR0_PG);
 
 	hw_cr0 = (cr0 & ~KVM_VM_CR0_ALWAYS_OFF);
@@ -3387,6 +3459,10 @@ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
 		if (!(old_cr0_pg & X86_CR0_PG) && (cr0 & X86_CR0_PG))
 			kvm_register_mark_dirty(vcpu, VCPU_EXREG_CR3);
 	}
+
+#ifdef CONFIG_KVM_NYX
+	vmx_nyx_strict_pt_apply_overlay(vcpu, false);
+#endif
 
 	/* depends on vcpu->arch.cr0 to be set to a new value */
 	vmx->emulation_required = vmx_emulation_required(vcpu);
@@ -4859,6 +4935,12 @@ static void __vmx_vcpu_reset(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 
+#ifdef CONFIG_KVM_NYX
+	vmx->nyx_strict_pt_overlay_active = false;
+	vmx->nyx_strict_pt_saved_cr3_load_exiting = 0;
+	vmx->nyx_strict_pt_saved_cr3_target_count = 0;
+#endif
+
 	init_vmcs(vmx);
 
 	if (nested)
@@ -5564,7 +5646,8 @@ static int handle_cr(struct kvm_vcpu *vcpu)
 			err = handle_set_cr0(vcpu, val);
 			return kvm_complete_insn_gp(vcpu, err);
 		case 3:
-			WARN_ON_ONCE(enable_unrestricted_guest);
+			WARN_ON_ONCE(enable_unrestricted_guest &&
+				     !vmx_nyx_strict_pt_runtime_enabled(vcpu));
 
 			err = kvm_set_cr3(vcpu, val);
 			return kvm_complete_insn_gp(vcpu, err);
@@ -5892,6 +5975,25 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	if (unlikely(allow_smaller_maxphyaddr && !kvm_vcpu_is_legal_gpa(vcpu, gpa)))
 		return kvm_emulate_instruction(vcpu, 0);
 #ifdef CONFIG_KVM_NYX
+	if ((error_code & (PFERR_FETCH_MASK | PFERR_PRESENT_MASK)) ==
+	    (PFERR_FETCH_MASK | PFERR_PRESENT_MASK) &&
+	    (exit_qualification & EPT_VIOLATION_GVA_IS_VALID) &&
+	    vcpu->kvm->created_vcpus == 1 && !is_guest_mode(vcpu) &&
+	    !is_smm(vcpu) && tdp_mmu_enabled && vcpu->arch.mmu &&
+	    vcpu->arch.mmu->root_role.direct &&
+	    vcpu->arch.mmu->root_role.nyx_strict_target &&
+	    vmx_nyx_strict_pt_runtime_enabled(vcpu)) {
+		u64 current_cr3 =
+			nyx_strict_pt_policy_normalize_cr3(vmcs_readl(GUEST_CR3));
+
+		vcpu->arch.nyx_fault_cr3 = current_cr3;
+		if (current_cr3 == READ_ONCE(
+			    vcpu->kvm->arch.nyx_strict_pt->runtime_root.target_cr3))
+			return nyx_strict_pt_runtime_handle_exec_violation(vcpu,
+				vmcs_readl(GUEST_LINEAR_ADDRESS), gpa,
+				kvm_rip_read(vcpu), current_cr3);
+	}
+
 	if (vcpu->kvm->arch.wte_enabled) {
 		gfn_t gfn = gpa >> PAGE_SHIFT;
 		unsigned long flags;
@@ -8734,6 +8836,9 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
 	.set_cr0 = vmx_set_cr0,
 	.is_valid_cr4 = vmx_is_valid_cr4,
 	.set_cr4 = vmx_set_cr4,
+#ifdef CONFIG_KVM_NYX
+	.update_nyx_strict_pt = vmx_update_nyx_strict_pt,
+#endif
 	.set_efer = vmx_set_efer,
 	.get_idt = vmx_get_idt,
 	.set_idt = vmx_set_idt,
