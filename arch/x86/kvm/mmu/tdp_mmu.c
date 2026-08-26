@@ -1844,6 +1844,110 @@ bool kvm_tdp_mmu_set_nx_gfn(struct kvm *kvm,
 }
 
 /*
+ * Strict-target-only helper to split a huge page mapping this GFN and
+ * clear execute permission in valid nyx_strict_target roots.
+ */
+int kvm_tdp_mmu_nyx_strict_set_nx_gfn(struct kvm *kvm,
+				      const struct kvm_memory_slot *slot,
+				      gfn_t gfn, bool *flush)
+{
+	struct kvm_mmu_page *root;
+	int r = 0;
+
+	lockdep_assert_held_write(&kvm->mmu_lock);
+
+	if (!slot || !flush)
+		return -EINVAL;
+	*flush = false;
+
+	if (gfn + 1 < gfn)
+		return -EOVERFLOW;
+
+	for_each_valid_tdp_mmu_root_yield_safe(kvm, root, slot->as_id) {
+		if (!root->role.nyx_strict_target)
+			continue;
+
+		r = tdp_mmu_split_huge_pages_root(kvm, root, gfn, gfn + 1, PG_LEVEL_4K, false);
+		if (r) {
+			kvm_tdp_mmu_put_root(kvm, root);
+			return r;
+		}
+
+		if (set_nx_gfn(kvm, root, gfn))
+			*flush = true;
+	}
+
+	return 0;
+}
+
+static int nyx_strict_set_x_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
+				gfn_t gfn, bool *changed)
+{
+	struct tdp_iter iter;
+	u64 new_spte;
+
+	rcu_read_lock();
+
+	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, gfn, gfn + 1) {
+		if (!is_shadow_present_pte(iter.old_spte))
+			continue;
+
+		if (!is_last_spte(iter.old_spte, iter.level))
+			continue;
+
+		if (iter.level != PG_LEVEL_4K) {
+			rcu_read_unlock();
+			return -EIO;
+		}
+
+		if (is_mmio_spte(iter.old_spte))
+			continue;
+
+		new_spte = iter.old_spte | shadow_x_mask;
+		if (new_spte != iter.old_spte) {
+			tdp_mmu_iter_set_spte(kvm, &iter, new_spte);
+			*changed = true;
+		}
+		break;
+	}
+
+	rcu_read_unlock();
+	return 0;
+}
+
+int kvm_tdp_mmu_nyx_strict_set_x_gfn(struct kvm *kvm,
+				     const struct kvm_memory_slot *slot,
+				     gfn_t gfn, bool *flush)
+{
+	struct kvm_mmu_page *root;
+	bool changed = false;
+	int ret = 0;
+
+	lockdep_assert_held_write(&kvm->mmu_lock);
+
+	if (!slot || !flush)
+		return -EINVAL;
+	*flush = false;
+
+	if (gfn + 1 < gfn)
+		return -EOVERFLOW;
+
+	for_each_valid_tdp_mmu_root_yield_safe(kvm, root, slot->as_id) {
+		if (!root->role.nyx_strict_target)
+			continue;
+
+		ret = nyx_strict_set_x_gfn(kvm, root, gfn, &changed);
+		if (ret) {
+			kvm_tdp_mmu_put_root(kvm, root);
+			return ret;
+		}
+	}
+
+	*flush = changed;
+	return 0;
+}
+
+/*
  * Walk ALL leaf SPTEs and apply NX from the nx_bitmap.
  * Called after rescan sets bitmap bits to ensure existing SPTEs
  * get NX applied — not just newly created ones.

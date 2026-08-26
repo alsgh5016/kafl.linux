@@ -14,6 +14,9 @@
 #include "mmu_internal.h"
 #include "x86.h"
 #include "spte.h"
+#ifdef CONFIG_KVM_NYX
+#include "nyx_strict_pt_runtime.h"
+#endif
 
 #include <asm/e820/api.h>
 #include <asm/memtype.h>
@@ -239,6 +242,11 @@ out:
 		  get_rsvd_bits(&vcpu->arch.mmu->shadow_zero_check, spte, level));
 
 #ifdef CONFIG_KVM_NYX
+	if (sp->role.nyx_strict_target && slot && level == PG_LEVEL_4K &&
+	    !is_mmio_spte(spte) &&
+	    nyx_strict_pt_runtime_data_gfn_needs_nx(vcpu->kvm, gfn))
+		spte &= ~shadow_x_mask;
+
 	/* WtE auto-NX at the universal SPTE-creation entry point.
 	 *
 	 * make_spte is called by tdp_mmu_map_handle_target_level AND by

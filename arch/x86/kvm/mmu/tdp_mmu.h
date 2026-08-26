@@ -49,6 +49,12 @@ bool kvm_tdp_mmu_write_protect_gfn(struct kvm *kvm,
 				   int min_level);
 
 #ifdef CONFIG_KVM_NYX
+int kvm_tdp_mmu_nyx_strict_set_nx_gfn(struct kvm *kvm,
+				      const struct kvm_memory_slot *slot, gfn_t gfn,
+				      bool *flush);
+int kvm_tdp_mmu_nyx_strict_set_x_gfn(struct kvm *kvm,
+				     const struct kvm_memory_slot *slot, gfn_t gfn,
+				     bool *flush);
 bool kvm_tdp_mmu_set_nx_gfn(struct kvm *kvm,
 			    struct kvm_memory_slot *slot, gfn_t gfn);
 int kvm_tdp_mmu_enforce_nx_all(struct kvm *kvm);

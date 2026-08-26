@@ -56,6 +56,10 @@
 #include <asm/set_memory.h>
 #include <asm/vmx.h>
 
+#ifdef CONFIG_KVM_NYX
+#include "nyx_strict_pt_control.h"
+#endif
+
 #include "trace.h"
 
 extern bool itlb_multihit_kvm_mitigation;
@@ -4854,10 +4858,40 @@ static bool fast_pgd_switch(struct kvm *kvm, struct kvm_mmu *mmu,
 		return cached_root_find_without_current(kvm, mmu, new_pgd, new_role);
 }
 
+#ifdef CONFIG_KVM_NYX
+static bool kvm_nyx_strict_pt_is_target_root(struct kvm *kvm, u64 raw_cr3,
+					     union kvm_mmu_page_role role)
+{
+	struct nyx_strict_pt_control_context *context = kvm->arch.nyx_strict_pt;
+	struct nyx_strict_pt_policy_state policy_snapshot;
+
+	if (!context)
+		return false;
+
+	if (!smp_load_acquire(&context->runtime_root.enabled))
+		return false;
+
+	policy_snapshot = (struct nyx_strict_pt_policy_state) {
+		.state = KVM_NYX_STRICT_PT_ENABLED,
+		.target_cr3 = READ_ONCE(context->runtime_root.target_cr3),
+	};
+
+	return nyx_strict_pt_policy_is_target_root(&policy_snapshot, raw_cr3,
+						   role.guest_mode, role.smm,
+						   role.direct && tdp_mmu_enabled);
+}
+#endif
+
 void kvm_mmu_new_pgd(struct kvm_vcpu *vcpu, gpa_t new_pgd)
 {
 	struct kvm_mmu *mmu = vcpu->arch.mmu;
 	union kvm_mmu_page_role new_role = mmu->root_role;
+
+#ifdef CONFIG_KVM_NYX
+	new_role.nyx_strict_target =
+		kvm_nyx_strict_pt_is_target_root(vcpu->kvm, new_pgd, new_role);
+	mmu->root_role.nyx_strict_target = new_role.nyx_strict_target;
+#endif
 
 	/*
 	 * Return immediately if no usable root was found, kvm_mmu_reload()
@@ -5428,6 +5462,11 @@ kvm_calc_tdp_mmu_root_page_role(struct kvm_vcpu *vcpu,
 	role.level = kvm_mmu_get_tdp_level(vcpu);
 	role.direct = true;
 	role.has_4_byte_gpte = false;
+
+#ifdef CONFIG_KVM_NYX
+	role.nyx_strict_target =
+		kvm_nyx_strict_pt_is_target_root(vcpu->kvm, kvm_read_cr3(vcpu), role);
+#endif
 
 	return role;
 }
