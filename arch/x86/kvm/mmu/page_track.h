@@ -26,17 +26,30 @@ bool kvm_gfn_is_write_tracked(struct kvm *kvm,
 #ifdef CONFIG_KVM_EXTERNAL_WRITE_TRACKING
 int kvm_page_track_init(struct kvm *kvm);
 void kvm_page_track_cleanup(struct kvm *kvm);
+int kvm_page_track_register_internal_notifier(
+	struct kvm *kvm, struct kvm_page_track_notifier_node *n);
+void kvm_page_track_unregister_internal_notifier(
+	struct kvm *kvm, struct kvm_page_track_notifier_node *n);
 
 void __kvm_page_track_write(struct kvm *kvm, gpa_t gpa, const u8 *new, int bytes);
 void kvm_page_track_delete_slot(struct kvm *kvm, struct kvm_memory_slot *slot);
 
 static inline bool kvm_page_track_has_external_user(struct kvm *kvm)
 {
-	return !hlist_empty(&kvm->arch.track_notifier_head.track_notifier_list);
+	return READ_ONCE(kvm->arch.track_notifier_head.external_notifier_count);
 }
 #else
 static inline int kvm_page_track_init(struct kvm *kvm) { return 0; }
 static inline void kvm_page_track_cleanup(struct kvm *kvm) { }
+static inline int kvm_page_track_register_internal_notifier(
+	struct kvm *kvm, struct kvm_page_track_notifier_node *n)
+{
+	return -EOPNOTSUPP;
+}
+static inline void kvm_page_track_unregister_internal_notifier(
+	struct kvm *kvm, struct kvm_page_track_notifier_node *n)
+{
+}
 
 static inline void __kvm_page_track_write(struct kvm *kvm, gpa_t gpa,
 					  const u8 *new, int bytes) { }

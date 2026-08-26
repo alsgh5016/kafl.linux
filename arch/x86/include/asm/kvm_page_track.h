@@ -15,6 +15,7 @@
 struct kvm_page_track_notifier_head {
 	struct srcu_struct track_srcu;
 	struct hlist_head track_notifier_list;
+	unsigned int external_notifier_count;
 };
 
 struct kvm_page_track_notifier_node {
