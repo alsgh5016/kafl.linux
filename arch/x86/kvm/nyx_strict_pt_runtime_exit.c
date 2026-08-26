@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include <linux/export.h>
+
 #include "mmu/tdp_mmu.h"
 #include "nyx_strict_pt_runtime_internal.h"
 
@@ -136,6 +138,7 @@ out_unlock_fail_closed:
 	return nyx_strict_pt_runtime_fail_closed_session(runtime,
 						 ret ?: -EIO);
 }
+EXPORT_SYMBOL_GPL(nyx_strict_pt_runtime_handle_exec_violation);
 
 int nyx_strict_pt_runtime_handle_ack(struct kvm *kvm,
 	struct kvm_nyx_strict_pt_control *control)

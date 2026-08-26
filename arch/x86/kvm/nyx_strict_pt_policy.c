@@ -2,6 +2,10 @@
 
 #include "nyx_strict_pt_policy.h"
 
+#ifdef __KERNEL__
+#include <linux/export.h>
+#endif
+
 static bool nyx_strict_pt_policy_valid_command(__u16 command)
 {
 	switch (command) {
@@ -49,6 +53,9 @@ __u64 nyx_strict_pt_policy_normalize_cr3(__u64 raw_cr3)
 {
 	return raw_cr3 & ~((1ULL << 63) | ((1ULL << 12) - 1));
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(nyx_strict_pt_policy_normalize_cr3);
+#endif
 
 enum nyx_strict_pt_policy_result
 nyx_strict_pt_policy_enable(struct nyx_strict_pt_policy_state *state,
